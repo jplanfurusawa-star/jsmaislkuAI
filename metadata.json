@@ -1,0 +1,6 @@
+{
+  "name": "JSマイソク作成AI",
+  "description": "事業用不動産の募集図面・マイソクをアップロードし、GeminiのAI画像解析を利用して物件情報を抽出。自動検算、デザインプレビュー、PDF出力を一気通貫で行う作成業務支援アプリです。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

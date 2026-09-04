@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "mysokus": {
+      "title": "MySoku Project",
+      "description": "Real estate mysoku flyer presentation project with normalized cloud storage references",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "propertyName": { "type": "string" },
+        "room": { "type": "string" },
+        "address": { "type": "string" },
+        "rentAmount": { "type": "number" },
+        "format": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "staffName": { "type": "string" },
+        "status": { "type": "string" },
+        "storedImages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "imageId": { "type": "string" },
+              "storagePath": { "type": "string" },
+              "downloadUrl": { "type": "string" },
+              "category": { "type": "string" },
+              "label": { "type": "string" },
+              "mimeType": { "type": "string" }
+            }
+          }
+        },
+        "data": { "type": "object" },
+        "additionalItems": { "type": "array" },
+        "jsContact": { "type": "object" }
+      },
+      "required": ["id", "userId", "propertyName", "createdAt"]
+    }
+  },
+  "storage": {
+    "paths": {
+      "users/{userId}/mysokus/{mysokuId}/images/{imageId}": {
+        "description": "High-resolution real estate images, floor plans, maps, and photos for a specific user mysoku",
+        "rules": {
+          "read": "request.auth != null && request.auth.uid == userId",
+          "write": "request.auth != null && request.auth.uid == userId && request.resource.size < 20 * 1024 * 1024 && request.resource.contentType.matches('image/.*')"
+        }
+      }
+    }
+  }
+}
