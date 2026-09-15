@@ -95,6 +95,17 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
 
       setExtractStatus('AIが文字情報（物件名・住所・賃料・面積・契約条件・設備）および写真・図面パーツを認識中...');
 
+      // Vercel Serverless Payload Safeguard:
+      // Ensure total JSON payload stays safely within Vercel's 4.5MB request limit
+      let totalPayloadSize = 0;
+      for (const item of apiFiles) {
+        totalPayloadSize += (item.data || '').length;
+      }
+      if (totalPayloadSize > 3.8 * 1024 * 1024 && apiFiles.length > 3) {
+        console.warn(`[Step2Extracting] High payload size detected (${Math.round(totalPayloadSize / 1024)}KB). Retaining top 3 essential pages to avoid Vercel 413.`);
+        apiFiles.splice(3);
+      }
+
       // 2. Call /api/extract with multimodal images and raw extracted text
       const res = await fetch('/api/extract', {
         method: 'POST',
@@ -127,7 +138,9 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
           if (res.status === 504 || res.status === 502) {
             errorMsg = "サーバーがタイムアウトまたは高負荷です。再度お試しください。";
           } else if (res.status === 404) {
-            errorMsg = "解析APIエンドポイントが見つかりませんでした。";
+            errorMsg = "解析APIエンドポイントが見つかりませんでした (Status: 404)。";
+          } else if (res.status === 413) {
+            errorMsg = "資料データがVercelの送信上限（4.5MB）を超過しました。ファイルサイズを軽量化して再度お試しください。";
           }
         }
         setIsDailyQuotaError(isQuota || errorMsg.includes('無料利用枠') || errorMsg.includes('上限'));

@@ -2,14 +2,10 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
-const ai = new GoogleGenAI({ 
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
-});
+// Vercel Serverless Function & Next.js App Router runtime configurations
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 60; // Extend Vercel function execution timeout to 60s
 
 // In-Flight Request Deduplication & In-Memory Result Cache
 // Prevents redundant Gemini API calls for identical files and concurrent requests
@@ -17,26 +13,88 @@ const inFlightRequests = new Map<string, Promise<any>>();
 const extractionCache = new Map<string, { result: any; timestamp: number }>();
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes cache
 
-// Primary model: gemini-2.5-flash (fast, robust multimodal)
-// Fallback model: gemini-3.1-flash-lite (only used for temporary transient 503 errors, NOT for daily quota)
-const PRIMARY_MODEL = "gemini-2.5-flash";
-const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+// Candidate models in priority order:
+// 1. gemini-2.5-flash: high speed, multimodal extraction
+// 2. gemini-flash-latest: standard GA flash alias
+// 3. gemini-3.1-flash-lite: lightweight resilient fallback
+const CANDIDATE_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+];
 
 /**
- * Parses errors from Gemini API to distinguish between:
- * 1. Daily Quota Limit (FreeTier limit: 20 per day) -> MUST NOT retry, fail immediately
- * 2. Rate Limit (Per-minute RPM/TPM) -> Short delay retry allowed (max 1 time)
- * 3. Transient / 503 / 504 -> Short delay retry allowed (max 1 time)
+ * Lazy initialization of GoogleGenAI client with strict verification of GEMINI_API_KEY.
+ * Prevents build-time crashes and cleans whitespace/quotes from environment variables.
  */
-function analyzeGeminiError(error: any): {
+function getGeminiClient(): GoogleGenAI {
+  const rawKey = process.env.GEMINI_API_KEY || '';
+  const apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
+
+  if (!apiKey) {
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error("[Gemini API Configuration Error]");
+    console.error("HTTP Status: 500");
+    console.error("Error: process.env.GEMINI_API_KEY is not set or empty.");
+    console.error("Vercel Setup Instructions:");
+    console.error("1. Go to Vercel Project Settings > Environment Variables");
+    console.error("2. Add 'GEMINI_API_KEY' for Production, Preview, and Development");
+    console.error("3. Trigger a redeploy after saving the environment variable");
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    const missingErr: any = new Error("サーバー環境変数 GEMINI_API_KEY が未設定です。Vercelの環境変数設定をご確認の上、再デプロイしてください。");
+    missingErr.status = 500;
+    missingErr.code = "GEMINI_API_KEY_MISSING";
+    throw missingErr;
+  }
+
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+interface GeminiErrorAnalysis {
+  httpStatus: number | string;
+  statusCode: number;
+  errorCode: string;
+  errorMessage: string;
   isDailyQuota: boolean;
   isRateLimit: boolean;
   isTransient: boolean;
+  isAuthError: boolean;
+  isModelNotFound: boolean;
   userMessage: string;
-} {
+}
+
+/**
+ * Parses Gemini API error, classifies it, and outputs high-visibility server logs
+ * with the exact HTTP status and error details for Vercel / server monitoring.
+ */
+function analyzeAndLogGeminiError(context: string, model: string, error: any): GeminiErrorAnalysis {
   const errMsg = String(error?.message || error || '');
-  const errStatus = String(error?.status || '');
-  const errCode = error?.code || error?.status;
+  const rawStatus = error?.status || error?.statusCode || error?.response?.status || '';
+  const rawCode = error?.code || error?.error?.code || '';
+
+  let numericStatus = 500;
+  let httpStatusDisplay: string | number = rawStatus;
+
+  if (typeof rawStatus === 'number') {
+    numericStatus = rawStatus;
+  } else {
+    const match = errMsg.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
+    if (match) {
+      numericStatus = parseInt(match[1], 10);
+      httpStatusDisplay = numericStatus;
+    } else if (rawStatus) {
+      httpStatusDisplay = rawStatus;
+    } else {
+      httpStatusDisplay = '500 (Internal Error)';
+    }
+  }
 
   const isDailyQuota = 
     errMsg.includes("GenerateRequestsPerDay") ||
@@ -47,94 +105,158 @@ function analyzeGeminiError(error: any): {
 
   const isRateLimit = 
     !isDailyQuota && (
-      errStatus === "RESOURCE_EXHAUSTED" ||
-      errCode === 429 ||
+      rawStatus === "RESOURCE_EXHAUSTED" ||
+      numericStatus === 429 ||
       errMsg.includes("429") ||
       errMsg.includes("RESOURCE_EXHAUSTED") ||
-      errMsg.includes("Rate limit exceeded")
+      errMsg.includes("Rate limit exceeded") ||
+      errMsg.includes("Quota exceeded")
     );
 
+  const isAuthError =
+    numericStatus === 401 ||
+    numericStatus === 403 ||
+    rawStatus === "PERMISSION_DENIED" ||
+    rawStatus === "UNAUTHENTICATED" ||
+    errMsg.includes("API_KEY_INVALID") ||
+    errMsg.includes("API key not valid") ||
+    errMsg.includes("PERMISSION_DENIED") ||
+    errMsg.includes("has not been used in project") ||
+    errMsg.includes("it is disabled");
+
+  const isModelNotFound =
+    numericStatus === 404 ||
+    rawStatus === "NOT_FOUND" ||
+    errMsg.includes("not found") ||
+    errMsg.includes("models/");
+
   const isTransient = 
-    errStatus === "UNAVAILABLE" ||
-    errCode === 503 ||
-    errCode === 504 ||
+    rawStatus === "UNAVAILABLE" ||
+    numericStatus === 503 ||
+    numericStatus === 504 ||
+    numericStatus === 502 ||
     errMsg.includes("503") ||
     errMsg.includes("504") ||
     errMsg.includes("high demand") ||
-    errMsg.includes("temporarily unavailable");
+    errMsg.includes("temporarily unavailable") ||
+    errMsg.includes("overloaded");
 
-  let userMessage = "AI解析モデルへの接続に失敗しました。時間をおいて再試行してください。";
+  let userMessage = `AI解析モデルへの接続に失敗しました (Status: ${httpStatusDisplay})。時間をおいて再試行してください。`;
   if (isDailyQuota) {
     userMessage = "Gemini APIの本日の無料利用枠（1日20リクエスト上限）に達しました。時間をおいて再試行するか、有料APIキーまたは別プロジェクトの設定をご確認ください。";
+    numericStatus = 429;
   } else if (isRateLimit) {
-    userMessage = "AI解析リクエストが集中しています（短時間レート制限）。1分ほど時間をおいてから再試行してください。";
+    userMessage = "AI解析リクエストが集中しています（短時間レート制限: HTTP 429）。1分ほど時間をおいてから再試行してください。";
+    numericStatus = 429;
+  } else if (isAuthError) {
+    if (errMsg.includes("has not been used in project") || errMsg.includes("it is disabled")) {
+      userMessage = "Google Cloudで『Generative Language API』が有効化されていません。Google Cloud ConsoleのAPIとサービスから有効化してください。";
+    } else {
+      userMessage = `Gemini APIキーの認証に失敗しました (Status: ${httpStatusDisplay})。VercelのGEMINI_API_KEY環境変数の値をご確認ください。`;
+    }
+    numericStatus = numericStatus === 401 ? 401 : 403;
+  } else if (isModelNotFound) {
+    userMessage = `AIモデル (${model}) が見つかりませんでした (Status: 404)。`;
+    numericStatus = 404;
   }
 
-  return { isDailyQuota, isRateLimit, isTransient, userMessage };
+  // サーバーログへ実際のHTTPステータスとエラー詳細を出力
+  console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.error(`[Gemini API Server Error] Context: ${context}`);
+  console.error(`[Gemini API Server Error] Target Model: ${model}`);
+  console.error(`[Gemini API Server Error] HTTP Status: ${httpStatusDisplay} (Code: ${numericStatus})`);
+  console.error(`[Gemini API Server Error] Error Code: ${rawCode || rawStatus || 'NONE'}`);
+  console.error(`[Gemini API Server Error] Error Message: ${errMsg}`);
+  if (error?.errorDetails || error?.details || error?.response?.data) {
+    const details = error?.errorDetails || error?.details || error?.response?.data;
+    try {
+      console.error(`[Gemini API Server Error] Detailed Response:`, typeof details === 'object' ? JSON.stringify(details, null, 2) : details);
+    } catch {
+      console.error(`[Gemini API Server Error] Detailed Response:`, details);
+    }
+  }
+  if (error?.stack) {
+    console.error(`[Gemini API Server Error] Stack Trace:`, error.stack);
+  }
+  console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  return {
+    httpStatus: httpStatusDisplay,
+    statusCode: numericStatus,
+    errorCode: String(rawCode || rawStatus || ''),
+    errorMessage: errMsg,
+    isDailyQuota,
+    isRateLimit,
+    isTransient,
+    isAuthError,
+    isModelNotFound,
+    userMessage,
+  };
 }
 
 async function callGeminiSinglePass(contents: any, schema: any) {
-  // Attempt 1: Primary Model (gemini-2.5-flash)
-  try {
-    const response = await ai.models.generateContent({
-      model: PRIMARY_MODEL,
-      contents,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-      }
-    });
+  const ai = getGeminiClient();
+  let lastAnalysis: GeminiErrorAnalysis | null = null;
 
-    const text = response.text;
-    if (text) {
-      return JSON.parse(text);
-    }
-  } catch (err1: any) {
-    const analysis = analyzeGeminiError(err1);
-    console.warn(`[Gemini API] Primary model ${PRIMARY_MODEL} failed:`, err1?.message || err1);
+  // Try candidate models in order with resilient fallback
+  for (let i = 0; i < CANDIDATE_MODELS.length; i++) {
+    const model = CANDIDATE_MODELS[i];
+    const isLast = i === CANDIDATE_MODELS.length - 1;
 
-    // If Daily Quota is exceeded, NEVER retry or fall back - throw immediately
-    if (analysis.isDailyQuota) {
-      const quotaErr: any = new Error(analysis.userMessage);
-      quotaErr.isDailyQuota = true;
-      quotaErr.status = 429;
-      throw quotaErr;
-    }
-
-    // If Rate Limit (RPM) or Transient (503), wait 1.5s and retry ONCE with fallback model
-    if (analysis.isRateLimit || analysis.isTransient) {
-      console.log(`[Gemini API] Waiting 1500ms before single fallback attempt with ${FALLBACK_MODEL}...`);
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      try {
-        const response2 = await ai.models.generateContent({
-          model: FALLBACK_MODEL,
-          contents,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: schema,
-          }
-        });
-
-        const text2 = response2.text;
-        if (text2) {
-          return JSON.parse(text2);
+    try {
+      console.log(`[Gemini API] Requesting extraction with model: ${model} (${i + 1}/${CANDIDATE_MODELS.length})...`);
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: schema,
         }
-      } catch (err2: any) {
-        console.warn(`[Gemini API] Fallback model ${FALLBACK_MODEL} failed:`, err2?.message || err2);
-        const analysis2 = analyzeGeminiError(err2);
-        const finalErr: any = new Error(analysis2.userMessage);
-        finalErr.status = analysis2.isDailyQuota || analysis2.isRateLimit ? 429 : 500;
-        throw finalErr;
+      });
+
+      const text = response.text;
+      if (text) {
+        console.log(`[Gemini API] Successfully received extraction response from model: ${model}`);
+        return JSON.parse(text);
+      }
+      throw new Error(`AI解析モデル (${model}) からの応答が空でした。`);
+    } catch (err: any) {
+      const analysis = analyzeAndLogGeminiError(`Extraction Attempt [Model: ${model}]`, model, err);
+      lastAnalysis = analysis;
+
+      // If Daily Quota is exceeded, fail immediately without trying other models
+      if (analysis.isDailyQuota) {
+        const quotaErr: any = new Error(analysis.userMessage);
+        quotaErr.isDailyQuota = true;
+        quotaErr.status = 429;
+        quotaErr.httpStatus = analysis.httpStatus;
+        throw quotaErr;
+      }
+
+      // If Auth error (invalid API key or disabled API), fail immediately
+      if (analysis.isAuthError) {
+        const authErr: any = new Error(analysis.userMessage);
+        authErr.status = analysis.statusCode;
+        authErr.httpStatus = analysis.httpStatus;
+        authErr.isAuthError = true;
+        throw authErr;
+      }
+
+      // If more candidate models exist, wait briefly and retry with next model
+      if (!isLast) {
+        const waitMs = analysis.isRateLimit || analysis.isTransient ? 1500 : 600;
+        console.warn(`[Gemini API] Model ${model} failed (Status: ${analysis.httpStatus}). Trying fallback model in ${waitMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
       }
     }
-
-    const standardErr: any = new Error(analysis.userMessage);
-    standardErr.status = 500;
-    throw standardErr;
   }
 
-  throw new Error("AI解析モデルからの応答が空でした。");
+  const finalErr: any = new Error(lastAnalysis?.userMessage || "AI解析モデルへの接続に失敗しました。");
+  finalErr.status = lastAnalysis?.statusCode || 500;
+  finalErr.httpStatus = lastAnalysis?.httpStatus || 500;
+  finalErr.isDailyQuota = !!lastAnalysis?.isDailyQuota;
+  throw finalErr;
 }
 
 export async function POST(req: NextRequest) {
@@ -538,9 +660,25 @@ export async function POST(req: NextRequest) {
       inFlightRequests.delete(documentHash);
     }
   } catch (error: any) {
-    console.error("[API /api/extract] Execution error:", error);
-    const status = error?.status === 429 ? 429 : 500;
+    const rawStatus = error?.status || error?.statusCode;
+    const numericStatus = typeof rawStatus === 'number' ? rawStatus : (error?.isDailyQuota ? 429 : 500);
+    const displayStatus = error?.httpStatus || rawStatus || numericStatus;
     const errorMessage = error?.message || "AI解析処理中にエラーが発生しました。時間をおいて再試行してください。";
-    return NextResponse.json({ success: false, error: errorMessage, isDailyQuota: !!error?.isDailyQuota }, { status });
+
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error("[API /api/extract] Execution handler caught error:");
+    console.error(`[API /api/extract] HTTP Response Status: ${numericStatus} (Reported: ${displayStatus})`);
+    console.error(`[API /api/extract] Error Message: ${errorMessage}`);
+    if (error?.stack) {
+      console.error(`[API /api/extract] Stack:`, error.stack);
+    }
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    return NextResponse.json({ 
+      success: false, 
+      error: errorMessage, 
+      isDailyQuota: !!error?.isDailyQuota,
+      httpStatus: displayStatus,
+    }, { status: numericStatus });
   }
 }

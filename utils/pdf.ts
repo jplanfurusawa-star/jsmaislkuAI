@@ -803,16 +803,16 @@ export async function extractPdfTextAndRenderPages(dataUrl: string, maxPages = 4
         console.warn(`Page ${pageNum} text extraction failed`, textErr);
       }
 
-      // 2. ページ全体の高精細レンダリング (2.0倍スケール)
+      // 2. ページ全体の高精細レンダリング (1.4倍スケール: Vercelの4.5MBリクエスト上限を回避しつつ高精度OCRを維持)
       try {
-        const viewport = page.getViewport({ scale: 2.0 });
+        const viewport = page.getViewport({ scale: 1.4 });
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         const ctx = canvas.getContext('2d');
         if (ctx) {
           await (page.render as any)({ canvasContext: ctx, viewport, canvas }).promise;
-          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.80);
           const base64Data = jpegDataUrl.split(',')[1];
           if (base64Data) {
             pageImages.push({
