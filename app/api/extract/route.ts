@@ -14,13 +14,16 @@ const extractionCache = new Map<string, { result: any; timestamp: number }>();
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes cache
 
 // Candidate models in priority order:
-// 1. gemini-2.5-flash: high speed, multimodal extraction
-// 2. gemini-flash-latest: standard GA flash alias
-// 3. gemini-3.1-flash-lite: lightweight resilient fallback
-const CANDIDATE_MODELS = [
-  "gemini-2.5-flash",
+// 1. PRIMARY_MODEL (gemini-2.5-flash): high speed, multimodal extraction
+// 2. FALLBACK_MODELS (gemini-flash-latest, gemini-3.1-flash-lite): resilient fallback
+export const PRIMARY_MODEL = "gemini-2.5-flash";
+export const FALLBACK_MODELS: readonly string[] = [
   "gemini-flash-latest",
   "gemini-3.1-flash-lite",
+];
+export const CANDIDATE_MODELS: readonly string[] = [
+  PRIMARY_MODEL,
+  ...FALLBACK_MODELS,
 ];
 
 /**
@@ -560,7 +563,7 @@ export async function POST(req: NextRequest) {
 
     // Execute with In-Flight promise tracking
     const executionPromise = (async () => {
-      console.log(`[API /api/extract] Starting Gemini API call (model: ${PRIMARY_MODEL}) for doc: ${documentHash.slice(0, 8)}`);
+      console.log(`[API /api/extract] Starting Gemini API call (primary: ${PRIMARY_MODEL}, fallbacks: ${FALLBACK_MODELS.join(', ')}) for doc: ${documentHash.slice(0, 8)}`);
       const rawResult = await callGeminiSinglePass({ parts }, schema);
 
       // Deep sanitize strings to ensure only pure business values are preserved
