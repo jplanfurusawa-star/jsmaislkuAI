@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { AppState, defaultAppState, PropertyData, SavedMySoku } from "@/types";
-import { FileUp, Sparkles, LayoutTemplate, Edit, Layout, FileType2, FileSearch, Download, LogIn, Loader2, LogOut, History, UserPlus, Settings } from "lucide-react";
+import { AppState, defaultAppState, PropertyData, SavedMySoku, StaffPreset } from "@/types";
+import { FileUp, Sparkles, LayoutTemplate, Edit, Layout, FileType2, FileSearch, Download, LogIn, Loader2, LogOut, History, UserPlus, Settings, ShieldCheck, Link2, Crown } from "lucide-react";
 import Step1Upload from "@/components/Step1Upload";
 import Step2Extracting from "@/components/Step2Extracting";
 import Step3Method from "@/components/Step3Method";
@@ -15,6 +15,7 @@ import HistoryModal from "@/components/HistoryModal";
 import StaffPresetModal from "@/components/StaffPresetModal";
 import { auth, loginWithGoogle, logout } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
+import { getStaffPresets, fetchStaffPresetsFromCloud } from "@/lib/storage";
 
 const steps = [
   { id: 1, title: "資料アップロード", icon: FileUp },
@@ -38,13 +39,45 @@ export default function Home() {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
 
+  const [staffPresets, setStaffPresets] = useState<StaffPreset[]>([]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setAuthLoading(false);
+      if (user) {
+        setStaffPresets(getStaffPresets());
+        fetchStaffPresetsFromCloud().then((presets) => {
+          setStaffPresets(presets);
+          const linked = presets.find(p => p.googleEmail === user.email || p.googleUid === user.uid);
+          if (linked) {
+            setAppState(prev => {
+              if (!prev.jsContact.personName) {
+                return {
+                  ...prev,
+                  jsContact: {
+                    ...prev.jsContact,
+                    personName: linked.name,
+                    personTel: linked.tel,
+                    personEmail: linked.email,
+                    showContact: true,
+                  }
+                };
+              }
+              return prev;
+            });
+          }
+        }).catch(() => {});
+      }
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (user && isStaffModalOpen === false) {
+      setStaffPresets(getStaffPresets());
+    }
+  }, [isStaffModalOpen, user]);
 
   const handleNext = () => setCurrentStep((s) => Math.min(s + 1, 8));
   const handlePrev = () => setCurrentStep((s) => Math.max(s - 1, 1));
@@ -105,35 +138,68 @@ export default function Home() {
         </div>
 
         <div className="flex items-center space-x-4">
-          <nav className="flex space-x-2 text-xs font-medium">
-            <button
-              onClick={() => setIsStaffModalOpen(true)}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors"
-            >
-              <UserPlus className="w-3.5 h-3.5 text-blue-400" />
-              <span>担当者マスター</span>
-            </button>
-            <button
-              onClick={() => setIsHistoryModalOpen(true)}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors"
-            >
-              <History className="w-3.5 h-3.5 text-green-400" />
-              <span>保存履歴 (HSTRAGE)</span>
-            </button>
-          </nav>
+          {(() => {
+            const linkedStaff = staffPresets.find(
+              p => user && (p.googleEmail === user.email || p.googleUid === user.uid)
+            );
+            return (
+              <>
+                <nav className="flex space-x-2 text-xs font-medium">
+                  <button
+                    onClick={() => setIsStaffModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors border border-slate-700/60"
+                  >
+                    <UserPlus className="w-3.5 h-3.5 text-blue-400" />
+                    <span>担当者マスター</span>
+                    {linkedStaff && (
+                      <span className="text-[9px] bg-blue-500/30 text-blue-300 px-1.5 py-0.2 rounded font-bold flex items-center gap-0.5">
+                        <Link2 className="w-2.5 h-2.5" />
+                        連携中
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setIsHistoryModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors border border-slate-700/60"
+                  >
+                    <History className="w-3.5 h-3.5 text-green-400" />
+                    <span>保存履歴 (HSTRAGE)</span>
+                  </button>
+                </nav>
 
-          <div className="flex items-center space-x-3 border-l border-slate-700 pl-4">
-            <div className="flex items-center space-x-2">
-              {user.photoURL && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={user.photoURL} alt="Profile" className="w-6 h-6 rounded-full" />
-              )}
-              <span className="text-xs font-bold hidden sm:inline">{user.displayName || user.email}</span>
-            </div>
-            <button onClick={logout} className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition-colors" title="ログアウト">
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-          </div>
+                <div className="flex items-center space-x-3 border-l border-slate-700 pl-4">
+                  <div className="flex items-center space-x-2">
+                    {user.photoURL ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={user.photoURL} alt="Profile" className="w-7 h-7 rounded-full border border-slate-600" />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs">
+                        {(user.displayName || user.email || 'G').slice(0, 1)}
+                      </div>
+                    )}
+                    <div className="hidden sm:flex flex-col text-left">
+                      <span className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
+                        {linkedStaff ? `${linkedStaff.name}` : (user.displayName || user.email)}
+                        {linkedStaff?.role && (
+                          <span className="text-[10px] text-blue-300 font-normal">({linkedStaff.role})</span>
+                        )}
+                        {linkedStaff?.isAdmin && (
+                          <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded font-bold flex items-center gap-0.5 shadow-2xs">
+                            <Crown className="w-2.5 h-2.5 text-amber-400" />
+                            管理者
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono leading-tight">{user.email}</span>
+                    </div>
+                  </div>
+                  <button onClick={logout} className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition-colors p-1" title="ログアウト">
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </>
+            );
+          })()}
         </div>
       </header>
 

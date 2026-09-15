@@ -1160,10 +1160,10 @@ export function JsBDetailsSlide({
           <div className={`${spaceYClass} flex flex-col`}>
             {leftItems.map((item, idx) => (
               <div key={`left-${idx}`} className={`flex items-center ${rowHeightClass}`}>
-                <div className={`${labelWidthClass} ${badgeHeightClass} bg-[#6ED4A4] text-white text-[11px] font-bold rounded-md flex items-center justify-center shrink-0 tracking-wide px-1 text-center truncate shadow-2xs`}>
+                <div className={`${labelWidthClass} ${badgeHeightClass} bg-[#6ED4A4] text-white text-[11px] font-bold rounded-md flex items-center justify-center shrink-0 px-1 text-center truncate`}>
                   {item.label}
                 </div>
-                <div className={`${textClass} font-semibold text-slate-800 pl-3 leading-snug flex-1 truncate`} title={item.value}>
+                <div className={`${textClass} font-semibold text-slate-800 pl-3 leading-normal py-0.5 flex-1 truncate`} title={item.value}>
                   {item.value}
                 </div>
               </div>
@@ -1174,10 +1174,10 @@ export function JsBDetailsSlide({
           <div className={`${spaceYClass} flex flex-col`}>
             {rightItems.map((item, idx) => (
               <div key={`right-${idx}`} className={`flex items-center ${rowHeightClass}`}>
-                <div className={`${labelWidthClass} ${badgeHeightClass} bg-[#6ED4A4] text-white text-[11px] font-bold rounded-md flex items-center justify-center shrink-0 tracking-wide px-1 text-center truncate shadow-2xs`}>
+                <div className={`${labelWidthClass} ${badgeHeightClass} bg-[#6ED4A4] text-white text-[11px] font-bold rounded-md flex items-center justify-center shrink-0 px-1 text-center truncate`}>
                   {item.label}
                 </div>
-                <div className={`${textClass} font-semibold text-slate-800 pl-3 leading-snug flex-1 truncate`} title={item.value}>
+                <div className={`${textClass} font-semibold text-slate-800 pl-3 leading-normal py-0.5 flex-1 truncate`} title={item.value}>
                   {item.value}
                 </div>
               </div>
@@ -1238,15 +1238,15 @@ export function JsBLocationSlide({
               <AlertCircle className="w-7 h-7" />
             </div>
             <h3 className="text-base font-bold text-amber-950 mb-1.5 tracking-wide">
-              地図を取得できませんでした。地図画像を指定してください
+              Google Mapsを取得できませんでした。地図画像を指定してください
             </h3>
             <p className="text-xs text-amber-800/90 max-w-md leading-relaxed mb-4">
-              物件住所から自動地図が取得できませんでした。<br />
+              Google Maps Static APIの取得に失敗したか、APIキーが未設定です。<br />
               Google Mapsのスクリーンショット等を、Step 6 デザイン・編集の【案内図スロット】にアップロードまたは素材一覧から指定してください。
             </p>
             <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white border border-amber-200 rounded-md text-[11px] text-amber-900 font-semibold shadow-2xs">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-              AIによる推測地図や模式図は出力されません（正確性保護）
+              AIによる推測地図や他社地図への自動代替は行いません（正確性保護）
             </div>
           </div>
         )}
@@ -1254,7 +1254,7 @@ export function JsBLocationSlide({
 
       {/* 最下部フッター */}
       <div className="text-right text-[10px] text-slate-400 shrink-0 pt-1">
-        ※ 掲載地図は国土地理院またはOpenStreetMapの公認地図データです
+        ※ 掲載地図はGoogle Mapsの地図データです
       </div>
     </div>
   );

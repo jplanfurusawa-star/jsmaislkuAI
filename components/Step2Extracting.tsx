@@ -244,9 +244,10 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
         // Pre-generate Wide and Detail map images
         const propName = data.property?.name || '対象物件';
         const propAddr = data.property?.address || '';
+        const propAccess = data.property?.access || '';
         let mapRes = { wideMapUrl: '', detailMapUrl: '', isConfirmed: false, method: 'none' };
         try {
-          mapRes = await generateMapImages(propName, propAddr);
+          mapRes = await generateMapImages(propName, propAddr, propAccess);
         } catch (mErr) {
           console.warn("Pre map generation warning", mErr);
         }
@@ -304,8 +305,8 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
             maps: {
               wideMapUrl: mapRes.wideMapUrl,
               detailMapUrl: mapRes.detailMapUrl,
-              wideMapStatus: 'complete',
-              detailMapStatus: 'complete',
+              wideMapStatus: mapRes.isConfirmed ? 'complete' : 'failed',
+              detailMapStatus: mapRes.isConfirmed ? 'complete' : 'failed',
               isConfirmed: mapRes.isConfirmed,
               method: mapRes.method,
               googleMapsUrl: getGoogleMapsUrl(propName, propAddr),

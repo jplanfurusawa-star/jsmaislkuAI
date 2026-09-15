@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppState, StaffPreset, ExtractedImage, ImageCategory } from '@/types';
-import { Plus, Trash2, UserPlus, Sparkles, Building, Phone, Mail, ShieldCheck, HelpCircle, Image as ImageIcon, Download, Upload, Eye, Check, AlertCircle, FileArchive, Layers, MapPin, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, UserPlus, Sparkles, Building, Phone, Mail, ShieldCheck, HelpCircle, Image as ImageIcon, Download, Upload, Eye, Check, AlertCircle, FileArchive, Layers, MapPin, ExternalLink, ZoomIn, ZoomOut, Link2 } from 'lucide-react';
 import { getUpdatedLicenseNumber, LICENSE_RENEWAL_DATE } from '@/utils/realEstate';
-import { getStaffPresets } from '@/lib/storage';
+import { getStaffPresets, fetchStaffPresetsFromCloud } from '@/lib/storage';
+import { auth } from '@/lib/firebase';
 import { downloadExtractedImagesZip } from '@/utils/pdf';
-import { generateMapImages, getGoogleMapsUrl } from '@/utils/maps';
+import { generateMapImages, fetchSingleMap, getGoogleMapsUrl } from '@/utils/maps';
 import { selectJsBCoverImage, extractJsBMedia } from './JsBTemplate';
 import StaffPresetModal from './StaffPresetModal';
 
@@ -24,18 +25,35 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
   const [previewModalImg, setPreviewModalImg] = useState<{ url: string; label: string } | null>(null);
   const [isZipping, setIsZipping] = useState(false);
   const [isMapGenerating, setIsMapGenerating] = useState(false);
+  const [isDetailZooming, setIsDetailZooming] = useState(false);
+
+  const currentUser = auth.currentUser;
+  const currentUserPreset = staffPresets.find(
+    p => currentUser && (p.googleEmail === currentUser.email || p.googleUid === currentUser.uid)
+  );
 
   useEffect(() => {
     setStaffPresets(getStaffPresets());
+    fetchStaffPresetsFromCloud().then(setStaffPresets).catch(() => {});
   }, [isStaffModalOpen]);
 
-  // 地図の自動初期化・生成（物件名・所在地から広域図・詳細図を生成）
+  // 地図の自動初期化・生成（物件名・所在地からGoogle Maps Static API生成: 広域図と近接詳細図Zoom18）
   useEffect(() => {
     const propName = appState.data?.property.name;
     const propAddr = appState.data?.property.address;
-    if (propName && propAddr && (!appState.data?.maps?.wideMapUrl || !appState.data?.maps?.detailMapUrl)) {
+    const propAccess = appState.data?.property.access;
+    const wideUrl = appState.data?.maps?.wideMapUrl;
+    const detailUrl = appState.data?.maps?.detailMapUrl;
+    const isSameMap = Boolean(wideUrl && detailUrl && wideUrl === detailUrl);
+
+    if (
+      propName &&
+      propAddr &&
+      (!wideUrl || !detailUrl || isSameMap) &&
+      appState.data?.maps?.wideMapStatus !== 'failed'
+    ) {
       setIsMapGenerating(true);
-      generateMapImages(propName, propAddr).then(mapRes => {
+      generateMapImages(propName, propAddr, propAccess, { detailZoom: 18 }).then(mapRes => {
         setAppState(prev => {
           if (!prev.data) return prev;
           return {
@@ -43,10 +61,13 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
             data: {
               ...prev.data,
               maps: {
-                wideMapUrl: mapRes.wideMapUrl,
-                detailMapUrl: mapRes.detailMapUrl,
-                wideMapStatus: 'complete',
-                detailMapStatus: 'complete',
+                ...prev.data.maps,
+                wideMapUrl: mapRes.wideMapUrl || prev.data.maps?.wideMapUrl,
+                detailMapUrl: mapRes.detailMapUrl || prev.data.maps?.detailMapUrl,
+                wideZoom: mapRes.wideZoom || prev.data.maps?.wideZoom || 16,
+                detailZoom: mapRes.detailZoom || prev.data.maps?.detailZoom || 18,
+                wideMapStatus: mapRes.isConfirmed ? 'complete' : 'failed',
+                detailMapStatus: mapRes.isConfirmed ? 'complete' : 'failed',
                 isConfirmed: mapRes.isConfirmed,
                 method: mapRes.method,
                 googleMapsUrl: getGoogleMapsUrl(propName, propAddr),
@@ -54,7 +75,7 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
               images: {
                 ...prev.data.images,
                 map: prev.data.images?.map || mapRes.wideMapUrl,
-                detailMap: prev.data.images?.detailMap || mapRes.detailMapUrl,
+                detailMap: mapRes.detailMapUrl || prev.data.images?.detailMap,
               }
             }
           };
@@ -63,7 +84,7 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
         setIsMapGenerating(false);
       });
     }
-  }, [appState.data?.property.name, appState.data?.property.address]);
+  }, [appState.data?.property.name, appState.data?.property.address, appState.data?.property.access, appState.data?.maps?.wideMapStatus, appState.data?.maps?.wideMapUrl, appState.data?.maps?.detailMapUrl]);
 
   const addField = () => {
     setAppState(prev => ({
@@ -812,14 +833,16 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
             )}
             <button
               type="button"
-              disabled={isMapGenerating || !appState.data?.property.name}
+              disabled={isMapGenerating || isDetailZooming || !appState.data?.property.name}
               onClick={async () => {
                 const propName = appState.data?.property.name;
                 const propAddr = appState.data?.property.address;
+                const propAccess = appState.data?.property.access;
                 if (!propName || !propAddr) return;
                 setIsMapGenerating(true);
                 try {
-                  const mapRes = await generateMapImages(propName, propAddr);
+                  const currentDetailZoom = appState.data?.maps?.detailZoom || 18;
+                  const mapRes = await generateMapImages(propName, propAddr, propAccess, { detailZoom: currentDetailZoom });
                   setAppState(prev => {
                     if (!prev.data) return prev;
                     return {
@@ -827,18 +850,21 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
                       data: {
                         ...prev.data,
                         maps: {
+                          ...prev.data.maps,
                           wideMapUrl: mapRes.wideMapUrl,
                           detailMapUrl: mapRes.detailMapUrl,
-                          wideMapStatus: 'complete',
-                          detailMapStatus: 'complete',
-                          isConfirmed: true,
+                          wideZoom: mapRes.wideZoom || 16,
+                          detailZoom: mapRes.detailZoom || 18,
+                          wideMapStatus: mapRes.isConfirmed ? 'complete' : 'failed',
+                          detailMapStatus: mapRes.isConfirmed ? 'complete' : 'failed',
+                          isConfirmed: mapRes.isConfirmed,
                           method: mapRes.method,
                           googleMapsUrl: getGoogleMapsUrl(propName, propAddr),
                         },
                         images: {
                           ...prev.data.images,
-                          map: mapRes.wideMapUrl,
-                          detailMap: mapRes.detailMapUrl,
+                          map: mapRes.wideMapUrl || prev.data.images?.map,
+                          detailMap: mapRes.detailMapUrl || prev.data.images?.detailMap,
                         }
                       }
                     };
@@ -849,7 +875,7 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
               }}
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
             >
-              {isMapGenerating ? '地図再生成中...' : '地図を再生成'}
+              {isMapGenerating ? 'Google Maps取得中...' : 'Google Mapsを再取得'}
             </button>
           </div>
         </div>
@@ -857,14 +883,14 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
         {/* 広域図・詳細図プレビュー */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* 広域図 */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                広域図（駅・幹線道路・周辺環境）
+                広域図（主要駅・大通りアクセス）
               </span>
-              <span className="text-[10px] font-mono bg-slate-200 px-2 py-0.5 rounded text-slate-700">
-                縮尺: 100m / 方位: N
+              <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold">
+                Zoom {appState.data?.maps?.wideZoom || 16}
               </span>
             </div>
 
@@ -872,42 +898,167 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
               {appState.data?.maps?.wideMapUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={appState.data.maps.wideMapUrl} alt="広域図" className="w-full h-full object-contain" />
+              ) : isMapGenerating ? (
+                <div className="text-xs text-slate-400 font-bold flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                  Google Maps取得中...
+                </div>
               ) : (
-                <div className="text-xs text-slate-400 font-bold">広域図を生成中...</div>
+                <div className="text-center p-3 text-amber-800">
+                  <p className="text-xs font-bold text-amber-950 mb-1">
+                    Google Mapsを取得できませんでした。地図画像を指定してください
+                  </p>
+                  <p className="text-[10px] text-amber-700 leading-tight">
+                    APIキー未設定または通信失敗です。上の【案内図/サブ写真スロット】にGoogle Mapsのスクリーンショット等を指定してください。
+                  </p>
+                </div>
               )}
             </div>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-              <span>ステータス: <strong className="text-emerald-600">完成 (確認済み)</strong></span>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+              <span>ステータス: <strong className={appState.data?.maps?.wideMapUrl ? "text-emerald-600" : "text-amber-700"}>{appState.data?.maps?.wideMapUrl ? "広域図取得済み" : "未取得 (要指定)"}</strong></span>
               <span>対象: {appState.data?.property.name || '物件'}</span>
             </div>
+
+            {/* スライド適用ボタン */}
+            {appState.data?.maps?.wideMapUrl && (
+              <div className="pt-1 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAssignSlot('map', appState.data?.maps?.wideMapUrl || '')}
+                  className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    appState.data?.images?.map === appState.data?.maps?.wideMapUrl
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-white border border-slate-200 hover:bg-emerald-50 text-slate-700'
+                  }`}
+                >
+                  {appState.data?.images?.map === appState.data?.maps?.wideMapUrl ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-white" />
+                      LOCATIONスライドに適用中
+                    </>
+                  ) : (
+                    '広域図をLOCATIONスライドに適用'
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 詳細図 */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                詳細図（接道・街区・ピン・エントランス）
+                詳細図（近接街区・ピン周辺詳細）
               </span>
-              <span className="text-[10px] font-mono bg-slate-200 px-2 py-0.5 rounded text-slate-700">
-                縮尺: 20m / 方位: N
-              </span>
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-slate-500 font-medium mr-1">ズーム調整:</span>
+                {[17, 18, 19].map((z) => {
+                  const currentZ = appState.data?.maps?.detailZoom || 18;
+                  const isSelected = currentZ === z;
+                  return (
+                    <button
+                      key={z}
+                      type="button"
+                      disabled={isDetailZooming || isMapGenerating || !appState.data?.property.address}
+                      onClick={async () => {
+                        const addr = appState.data?.property.address;
+                        const access = appState.data?.property.access;
+                        if (!addr) return;
+                        setIsDetailZooming(true);
+                        try {
+                          const res = await fetchSingleMap(addr, z, 'detail', access);
+                          if (res.success && res.dataUrl) {
+                            setAppState(prev => {
+                              if (!prev.data) return prev;
+                              const isCurrentLocationSlide = prev.data.images?.map === prev.data.maps?.detailMapUrl;
+                              return {
+                                ...prev,
+                                data: {
+                                  ...prev.data,
+                                  maps: {
+                                    ...prev.data.maps,
+                                    detailMapUrl: res.dataUrl,
+                                    detailZoom: z,
+                                    detailMapStatus: 'complete',
+                                  },
+                                  images: {
+                                    ...prev.data.images,
+                                    detailMap: res.dataUrl,
+                                    map: isCurrentLocationSlide ? res.dataUrl : prev.data.images?.map,
+                                  }
+                                }
+                              };
+                            });
+                          }
+                        } finally {
+                          setIsDetailZooming(false);
+                        }
+                      }}
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${
+                        isSelected
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-blue-50'
+                      }`}
+                      title={z === 18 ? 'Zoom 18 (推奨・街区詳細)' : z === 17 ? 'Zoom 17 (近接)' : 'Zoom 19 (極近接)'}
+                    >
+                      {z === 18 ? '18(推奨)' : z}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="w-full h-48 bg-white border border-slate-200 rounded-lg overflow-hidden flex items-center justify-center relative group">
               {appState.data?.maps?.detailMapUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={appState.data.maps.detailMapUrl} alt="詳細図" className="w-full h-full object-contain" />
+              ) : isMapGenerating || isDetailZooming ? (
+                <div className="text-xs text-slate-400 font-bold flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping"></span>
+                  {isDetailZooming ? 'ズーム変更中...' : 'Google Maps取得中...'}
+                </div>
               ) : (
-                <div className="text-xs text-slate-400 font-bold">詳細図を生成中...</div>
+                <div className="text-center p-3 text-amber-800">
+                  <p className="text-xs font-bold text-amber-950 mb-1">
+                    Google Mapsを取得できませんでした。地図画像を指定してください
+                  </p>
+                  <p className="text-[10px] text-amber-700 leading-tight">
+                    APIキー未設定または通信失敗です。上の【案内図/サブ写真スロット】にGoogle Mapsのスクリーンショット等を指定してください。
+                  </p>
+                </div>
               )}
             </div>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-              <span>ステータス: <strong className="text-emerald-600">完成 (ピン・街区配置済み)</strong></span>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+              <span>ステータス: <strong className={appState.data?.maps?.detailMapUrl ? "text-blue-600" : "text-amber-700"}>{appState.data?.maps?.detailMapUrl ? `詳細図取得済み (Zoom ${appState.data?.maps?.detailZoom || 18})` : "未取得 (要指定)"}</strong></span>
               <span>対象: {appState.data?.property.address || '所在地'}</span>
             </div>
+
+            {/* スライド適用ボタン */}
+            {appState.data?.maps?.detailMapUrl && (
+              <div className="pt-1 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAssignSlot('map', appState.data?.maps?.detailMapUrl || '')}
+                  className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    appState.data?.images?.map === appState.data?.maps?.detailMapUrl
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'bg-white border border-slate-200 hover:bg-blue-50 text-slate-700'
+                  }`}
+                >
+                  {appState.data?.images?.map === appState.data?.maps?.detailMapUrl ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-white" />
+                      LOCATIONスライドに適用中
+                    </>
+                  ) : (
+                    '詳細図をLOCATIONスライドに適用'
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -998,10 +1149,35 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
             
             {/* Section A: 担当者情報 */}
             <div>
-              <h4 className="text-xs font-bold text-blue-600 mb-3 uppercase tracking-wider flex items-center gap-1.5 border-b border-blue-100 pb-1">
-                <Sparkles className="w-3.5 h-3.5" />
-                営業担当者情報（マイソク帯・提案メール記載）
-              </h4>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3 border-b border-blue-100 pb-1">
+                <h4 className="text-xs font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  営業担当者情報（マイソク帯・提案メール記載）
+                </h4>
+
+                {currentUser && currentUserPreset && appState.jsContact.personName !== currentUserPreset.name && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAppState(prev => ({
+                        ...prev,
+                        jsContact: {
+                          ...prev.jsContact,
+                          personName: currentUserPreset.name,
+                          personTel: currentUserPreset.tel,
+                          personEmail: currentUserPreset.email,
+                          showContact: true,
+                        }
+                      }));
+                    }}
+                    className="text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1 rounded-md transition-colors flex items-center gap-1 shadow-2xs"
+                  >
+                    <ShieldCheck className="w-3 h-3 text-blue-600" />
+                    ログイン中Google担当者「{currentUserPreset.name}」を反映
+                  </button>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">担当者名</label>
@@ -1034,6 +1210,25 @@ export default function Step6Design({ appState, setAppState, onNext, onPrev }: P
                   />
                 </div>
               </div>
+
+              {/* Matched Google Account Status */}
+              {(() => {
+                const matched = staffPresets.find(p => p.name === appState.jsContact.personName);
+                if (matched?.googleEmail) {
+                  return (
+                    <div className="mt-2 text-[11px] text-emerald-800 bg-emerald-50/70 border border-emerald-200 rounded-lg px-3 py-1.5 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Link2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Google連携アカウント: <span className="font-mono font-bold">{matched.googleEmail}</span></span>
+                      </div>
+                      <span className="text-[10px] bg-white text-emerald-700 font-bold px-2 py-0.5 rounded border border-emerald-200">
+                        認証連携済み
+                      </span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
 
             {/* Section B: 会社固定マスター情報 */}

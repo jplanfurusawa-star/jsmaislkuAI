@@ -36,6 +36,26 @@
         "jsContact": { "type": "object" }
       },
       "required": ["id", "userId", "propertyName", "createdAt"]
+    },
+    "staff_presets": {
+      "title": "Company Staff Preset",
+      "description": "Company staff contact profile linked with Google accounts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "tel": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "googleEmail": { "type": "string" },
+        "googleUid": { "type": "string" },
+        "googlePhotoUrl": { "type": "string" },
+        "googleDisplayName": { "type": "string" },
+        "isDefault": { "type": "boolean" },
+        "linkedAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "tel"]
     }
   },
   "storage": {

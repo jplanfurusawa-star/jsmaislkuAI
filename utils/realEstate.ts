@@ -589,29 +589,62 @@ export async function downloadPowerPointPresentation(
             h: 5.5,
             sizing: { type: 'contain', w: 10.9, h: 5.5 },
           });
-        }
 
-        // Green pill badge: PROPERTY
-        slide.addShape(pptx.ShapeType.roundRect, {
-          x: 5.8,
-          y: 1.4,
-          w: 1.7,
-          h: 0.35,
-          fill: { color: '20B26C' },
-          line: { color: '20B26C' },
-          rectRadius: 0.06,
-        });
-        slide.addText('PROPERTY', {
-          x: 5.8,
-          y: 1.4,
-          w: 1.7,
-          h: 0.35,
-          fontSize: 9,
-          bold: true,
-          color: 'FFFFFF',
-          align: 'center',
-          valign: 'middle',
-        });
+          // Green pill badge: PROPERTY
+          slide.addShape(pptx.ShapeType.roundRect, {
+            x: 5.8,
+            y: 1.4,
+            w: 1.7,
+            h: 0.35,
+            fill: { color: '20B26C' },
+            line: { color: '20B26C' },
+            rectRadius: 0.06,
+          });
+          slide.addText('PROPERTY', {
+            x: 5.8,
+            y: 1.4,
+            w: 1.7,
+            h: 0.35,
+            fontSize: 9,
+            bold: true,
+            color: 'FFFFFF',
+            align: 'center',
+            valign: 'middle',
+          });
+
+          slide.addText('※ 掲載地図はGoogle Mapsの地図データです', {
+            x: 7.0,
+            y: 6.9,
+            w: 5.5,
+            h: 0.3,
+            fontSize: 8,
+            color: '94A3B8',
+            align: 'right',
+            valign: 'bottom',
+          });
+        } else {
+          // 地図未取得時のプレースホルダー（誤った代替地図の出力を防止）
+          slide.addShape(pptx.ShapeType.roundRect, {
+            x: 1.5,
+            y: 1.8,
+            w: 10.3,
+            h: 4.6,
+            fill: { color: 'FFFBEB' },
+            line: { color: 'FCD34D', width: 1, dashType: 'dash' },
+            rectRadius: 0.1,
+          });
+          slide.addText('Google Mapsを取得できませんでした。地図画像を指定してください', {
+            x: 2.0,
+            y: 3.4,
+            w: 9.3,
+            h: 0.8,
+            fontSize: 14,
+            bold: true,
+            color: '78350F',
+            align: 'center',
+            valign: 'middle',
+          });
+        }
       } else if (slideDef.type === 'PHOTO') {
         // ------------------------------------------
         // PHOTO: 物件写真（枚数に応じた動的レイアウト）
@@ -1246,7 +1279,7 @@ export async function downloadPdfPresentation(
       if (hadHiddenClass) {
         el.classList.remove('hidden');
       }
-      el.style.display = 'flex';
+      el.style.display = 'block';
       el.style.visibility = 'visible';
 
       try {
@@ -1255,23 +1288,46 @@ export async function downloadPdfPresentation(
         }
 
         const canvas = await html2canvas(el, {
-          scale: 2,
+          scale: 2.5,
           useCORS: true,
           allowTaint: true,
           logging: false,
+          backgroundColor: '#ffffff',
+          letterRendering: false,
           ignoreElements: (element) => {
             return element.hasAttribute('data-pdf-ignore') || element.hasAttribute('data-export-hidden');
           },
           onclone: (clonedDoc, clonedEl) => {
             if (clonedEl instanceof HTMLElement) {
-              clonedEl.style.display = 'flex';
+              clonedEl.style.display = 'block';
               clonedEl.style.visibility = 'visible';
             }
+
+            // フォント描画崩れ・文字分断・アンチエイリアス崩れを防ぐクローン内スタイル注入
+            try {
+              const fixStyle = clonedDoc.createElement('style');
+              fixStyle.textContent = `
+                * {
+                  -webkit-font-smoothing: antialiased !important;
+                  -moz-osx-font-smoothing: grayscale !important;
+                  text-rendering: optimizeLegibility !important;
+                }
+                body > div img {
+                  display: inline-block !important;
+                }
+              `;
+              clonedDoc.head?.appendChild(fixStyle);
+            } catch (styleErr) {
+              // ignore
+            }
+
             sanitizeOklchColorsForHtml2canvas(clonedDoc, clonedEl);
           },
         });
-        const imgData = canvas.toDataURL('image/jpeg', 0.95);
-        pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+
+        // JPEGの非可逆圧縮ノイズ（文字周辺のモスキートノイズ・極細線の消失）を防ぐため、可逆圧縮PNGで出力
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
         renderedPagesCount++;
       } catch (pageErr) {
         console.error(`Error rendering page ${i + 1} for PDF:`, pageErr);

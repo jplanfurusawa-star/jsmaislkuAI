@@ -101,6 +101,8 @@ export type PropertyData = {
   maps?: {
     wideMapUrl?: string;
     detailMapUrl?: string;
+    wideZoom?: number;
+    detailZoom?: number;
     scale?: string;
     wideMapStatus?: string;
     detailMapStatus?: string;
@@ -137,6 +139,13 @@ export type StaffPreset = {
   email: string;
   role?: string;
   isDefault?: boolean;
+  isAdmin?: boolean;
+  order?: number;
+  googleEmail?: string;
+  googleUid?: string;
+  googlePhotoUrl?: string;
+  googleDisplayName?: string;
+  linkedAt?: string;
 };
 
 export interface StoredImageRef {
@@ -231,9 +240,9 @@ export const defaultPropertyData: PropertyData = {
 };
 
 export const defaultStaffPresets: StaffPreset[] = [
-  { id: '1', name: '古澤 孝典', tel: '090-9876-5432', email: 'furusawa@j-jsquare.com', role: 'チーフディレクター', isDefault: true },
-  { id: '2', name: '山田 太郎', tel: '090-1234-5678', email: 'yamada@j-jsquare.com', role: '営業担当' },
-  { id: '3', name: '佐藤 花子', tel: '080-2345-6789', email: 'sato@j-jsquare.com', role: '営業担当' },
+  { id: '1', name: '古澤 孝典', tel: '090-9876-5432', email: 'furusawa@j-jsquare.com', role: 'チーフディレクター', isDefault: true, isAdmin: true, order: 0 },
+  { id: '2', name: '山田 太郎', tel: '090-1234-5678', email: 'yamada@j-jsquare.com', role: '営業担当', isAdmin: false, order: 1 },
+  { id: '3', name: '佐藤 花子', tel: '080-2345-6789', email: 'sato@j-jsquare.com', role: '営業担当', isAdmin: false, order: 2 },
 ];
 
 export const defaultAppState: AppState = {

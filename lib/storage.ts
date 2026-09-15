@@ -10,15 +10,35 @@ import {
   ImageCategory,
 } from '@/types';
 import { db, auth, storage } from './firebase';
-import { collection, doc, setDoc, getDoc, getDocs, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc, deleteField, query, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 const STAFF_PRESETS_KEY = 'js_mysoku_staff_presets';
 const SAVED_MYSOKUS_KEY = 'js_mysoku_saved_list';
 const LAST_ACTIVE_ID_KEY = 'js_mysoku_last_active_id';
 
+/**
+ * Strips all `undefined` properties recursively from objects before writing to Firestore.
+ * Prevents "Unsupported field value: undefined" errors from Firebase SDK.
+ */
+export function removeUndefinedFields<T>(obj: T): T {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(item => removeUndefinedFields(item)) as any;
+  }
+  const result: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      result[key] = removeUndefinedFields(value);
+    }
+  }
+  return result;
+}
+
 // -------------------------------------------------------------
-// Staff Presets
+// Staff Presets (LocalStorage + Firestore Cloud Sync & Google Linking)
 // -------------------------------------------------------------
 
 export function getStaffPresets(): StaffPreset[] {
@@ -26,7 +46,8 @@ export function getStaffPresets(): StaffPreset[] {
   try {
     const saved = localStorage.getItem(STAFF_PRESETS_KEY);
     if (saved) {
-      return JSON.parse(saved);
+      const parsed: StaffPreset[] = JSON.parse(saved);
+      return parsed.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     }
   } catch (e) {
     console.error("Error reading staff presets from localStorage", e);
@@ -37,34 +58,249 @@ export function getStaffPresets(): StaffPreset[] {
 export function saveStaffPresets(presets: StaffPreset[]) {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STAFF_PRESETS_KEY, JSON.stringify(presets));
+    const sorted = [...presets].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    localStorage.setItem(STAFF_PRESETS_KEY, JSON.stringify(sorted));
   } catch (e) {
     console.error("Error saving staff presets to localStorage", e);
   }
 }
 
+export async function fetchStaffPresetsFromCloud(): Promise<StaffPreset[]> {
+  const localList = getStaffPresets();
+  if (!auth.currentUser) return localList;
+
+  try {
+    const colRef = collection(db, 'staff_presets');
+    const snap = await getDocs(colRef);
+    if (snap.empty) {
+      const curEmail = auth.currentUser.email || '';
+      if (curEmail.toLowerCase().includes('furusawa') || curEmail === 'jplan.furusawa@gmail.com') {
+        const furusawa = localList.find(p => p.name.includes('古澤') || String(p.id) === '1');
+        if (furusawa && !furusawa.googleEmail) {
+          furusawa.googleEmail = curEmail;
+          furusawa.googleUid = auth.currentUser.uid;
+          furusawa.googleDisplayName = auth.currentUser.displayName || '古澤 孝典';
+          furusawa.googlePhotoUrl = auth.currentUser.photoURL || undefined;
+          furusawa.linkedAt = new Date().toISOString();
+          furusawa.isAdmin = true;
+        }
+      }
+      // Seed initial presets to Firestore if none exist in cloud
+      for (let i = 0; i < localList.length; i++) {
+        const p = localList[i];
+        p.order = typeof p.order === 'number' ? p.order : i;
+        await setDoc(doc(db, 'staff_presets', String(p.id)), removeUndefinedFields({
+          ...p,
+          updatedAt: new Date().toISOString()
+        }));
+      }
+      saveStaffPresets(localList);
+      return localList;
+    }
+
+    const cloudPresets: StaffPreset[] = snap.docs.map((d, index) => {
+      const data = d.data();
+      const id = String(data.id || d.id);
+      return {
+        id,
+        name: data.name || '',
+        tel: data.tel || '',
+        email: data.email || '',
+        role: data.role || '',
+        isDefault: !!data.isDefault,
+        isAdmin: typeof data.isAdmin === 'boolean' ? data.isAdmin : (data.name?.includes('古澤') || id === '1'),
+        order: typeof data.order === 'number' ? data.order : index,
+        googleEmail: data.googleEmail || undefined,
+        googleUid: data.googleUid || undefined,
+        googlePhotoUrl: data.googlePhotoUrl || undefined,
+        googleDisplayName: data.googleDisplayName || undefined,
+        linkedAt: data.linkedAt || undefined,
+      };
+    }).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    const curEmail = auth.currentUser.email || '';
+    if (curEmail.toLowerCase().includes('furusawa') || curEmail === 'jplan.furusawa@gmail.com') {
+      const furusawa = cloudPresets.find(p => p.name.includes('古澤') || String(p.id) === '1');
+      if (furusawa && !furusawa.googleEmail) {
+        furusawa.googleEmail = curEmail;
+        furusawa.googleUid = auth.currentUser.uid;
+        furusawa.googleDisplayName = auth.currentUser.displayName || '古澤 孝典';
+        furusawa.googlePhotoUrl = auth.currentUser.photoURL || undefined;
+        furusawa.linkedAt = new Date().toISOString();
+        furusawa.isAdmin = true;
+        setDoc(doc(db, 'staff_presets', String(furusawa.id)), removeUndefinedFields({
+          ...furusawa,
+          updatedAt: new Date().toISOString()
+        })).catch(() => {});
+      }
+    }
+
+    saveStaffPresets(cloudPresets);
+    return cloudPresets;
+  } catch (err) {
+    console.warn("Firestore staff_presets fetch failed, using local presets:", err);
+    return localList;
+  }
+}
+
 export function addStaffPreset(newPreset: Omit<StaffPreset, 'id'>): StaffPreset[] {
   const presets = getStaffPresets();
+  const maxOrder = presets.reduce((max, p) => Math.max(max, p.order ?? 0), -1);
   const created: StaffPreset = {
     ...newPreset,
     id: Date.now().toString(),
+    order: typeof newPreset.order === 'number' ? newPreset.order : maxOrder + 1,
+    isAdmin: typeof newPreset.isAdmin === 'boolean' ? newPreset.isAdmin : false,
   };
-  const updated = [...presets, created];
+  const updated = [...presets, created].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   saveStaffPresets(updated);
+
+  if (auth.currentUser) {
+    const payload = removeUndefinedFields({
+      ...created,
+      updatedAt: new Date().toISOString(),
+    });
+    setDoc(doc(db, 'staff_presets', String(created.id)), payload)
+      .catch(err => console.warn("Failed to sync new preset to Firestore:", err));
+  }
+
   return updated;
 }
 
 export function updateStaffPreset(updatedPreset: StaffPreset): StaffPreset[] {
   const presets = getStaffPresets();
-  const updated = presets.map(p => p.id === updatedPreset.id ? updatedPreset : p);
+  const updated = presets.map(p => String(p.id) === String(updatedPreset.id) ? { ...p, ...updatedPreset } : p);
+  const sorted = updated.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  saveStaffPresets(sorted);
+
+  if (auth.currentUser) {
+    const payload = removeUndefinedFields({
+      ...updatedPreset,
+      updatedAt: new Date().toISOString(),
+    });
+    setDoc(doc(db, 'staff_presets', String(updatedPreset.id)), payload)
+      .catch(err => console.warn("Failed to sync preset update to Firestore:", err));
+  }
+
+  return sorted;
+}
+
+export function reorderStaffPresets(newOrderPresets: StaffPreset[]): StaffPreset[] {
+  const updated = newOrderPresets.map((p, idx) => ({
+    ...p,
+    order: idx,
+  }));
   saveStaffPresets(updated);
+
+  if (auth.currentUser) {
+    for (const p of updated) {
+      setDoc(doc(db, 'staff_presets', String(p.id)), removeUndefinedFields({
+        ...p,
+        updatedAt: new Date().toISOString(),
+      })).catch(err => console.warn("Failed to sync order to Firestore:", err));
+    }
+  }
+
   return updated;
+}
+
+export function moveStaffPreset(id: string, direction: 'up' | 'down' | 'top'): StaffPreset[] {
+  const presets = [...getStaffPresets()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const index = presets.findIndex(p => String(p.id) === String(id));
+  if (index === -1) return presets;
+
+  if (direction === 'top') {
+    const [item] = presets.splice(index, 1);
+    presets.unshift(item);
+  } else if (direction === 'up' && index > 0) {
+    const temp = presets[index - 1];
+    presets[index - 1] = presets[index];
+    presets[index] = temp;
+  } else if (direction === 'down' && index < presets.length - 1) {
+    const temp = presets[index + 1];
+    presets[index + 1] = presets[index];
+    presets[index] = temp;
+  }
+
+  return reorderStaffPresets(presets);
 }
 
 export function deleteStaffPreset(id: string): StaffPreset[] {
   const presets = getStaffPresets();
-  const updated = presets.filter(p => p.id !== id);
+  const updated = presets.filter(p => String(p.id) !== String(id));
+  const sorted = updated.map((p, idx) => ({ ...p, order: idx }));
+  saveStaffPresets(sorted);
+
+  if (auth.currentUser) {
+    deleteDoc(doc(db, 'staff_presets', String(id))).catch(err => console.warn("Failed to delete preset from Firestore:", err));
+  }
+
+  return sorted;
+}
+
+export async function linkStaffPresetWithGoogle(
+  presetId: string,
+  googleData: {
+    googleEmail: string;
+    googleUid?: string;
+    googleDisplayName?: string;
+    googlePhotoUrl?: string;
+  }
+): Promise<StaffPreset[]> {
+  const presets = getStaffPresets();
+  const target = presets.find(p => p.id === presetId);
+  if (!target) return presets;
+
+  const linkedPreset: StaffPreset = {
+    ...target,
+    googleEmail: googleData.googleEmail,
+    googleUid: googleData.googleUid,
+    googleDisplayName: googleData.googleDisplayName,
+    googlePhotoUrl: googleData.googlePhotoUrl,
+    linkedAt: new Date().toISOString(),
+  };
+
+  return updateStaffPreset(linkedPreset);
+}
+
+export async function unlinkStaffPresetGoogle(presetId: string): Promise<StaffPreset[]> {
+  const presets = getStaffPresets();
+  const target = presets.find(p => p.id === presetId);
+  if (!target) return presets;
+
+  const unlinkedPreset: StaffPreset = {
+    ...target,
+    googleEmail: undefined,
+    googleUid: undefined,
+    googleDisplayName: undefined,
+    googlePhotoUrl: undefined,
+    linkedAt: undefined,
+  };
+
+  const updated = presets.map(p => p.id === presetId ? unlinkedPreset : p);
   saveStaffPresets(updated);
+
+  if (auth.currentUser) {
+    try {
+      await updateDoc(doc(db, 'staff_presets', presetId), {
+        googleEmail: deleteField(),
+        googleUid: deleteField(),
+        googleDisplayName: deleteField(),
+        googlePhotoUrl: deleteField(),
+        linkedAt: deleteField(),
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn("Failed to unlink preset in Firestore via updateDoc:", err);
+      // Fallback to sanitized setDoc
+      const payload = removeUndefinedFields({
+        ...unlinkedPreset,
+        updatedAt: new Date().toISOString(),
+      });
+      setDoc(doc(db, 'staff_presets', presetId), payload).catch(() => {});
+    }
+  }
+
   return updated;
 }
 
@@ -475,7 +711,7 @@ export async function persistMySoku(appState: AppState, thumbnail?: string): Pro
 
   try {
     const docRef = doc(db, 'mysokus', mysokuId);
-    await setDoc(docRef, savedItem);
+    await setDoc(docRef, removeUndefinedFields(savedItem));
   } catch (err: any) {
     console.error("Failed to save to Firestore:", err);
     throw new Error(`Cloud Firestore (HSTRAGE) へのデータ保存に失敗しました: ${err?.message || 'Firestore write failed'}`);

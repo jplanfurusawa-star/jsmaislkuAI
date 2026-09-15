@@ -43,6 +43,7 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
   const [isMapLoading, setIsMapLoading] = useState(false);
   const [localWideMap, setLocalWideMap] = useState<string>('');
   const [localDetailMap, setLocalDetailMap] = useState<string>('');
+  const mapAttemptedRef = useRef(false);
 
   // Selected images from appState
   const images = data?.images || {};
@@ -55,15 +56,18 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
 
   // 自動地図生成（広域図または詳細図が未生成の場合、即座に自動生成して反映）
   useEffect(() => {
-    if (!data) return;
+    if (!data || mapAttemptedRef.current) return;
     const propName = data.property?.name || '対象物件';
     const propAddr = data.property?.address || '';
     const currentWide = data.maps?.wideMapUrl || images.map;
     const currentDetail = data.maps?.detailMapUrl || images.detailMap;
 
-    if (!currentWide || !currentDetail) {
+    const isSame = Boolean(currentWide && currentDetail && currentWide === currentDetail);
+
+    if (!currentWide || !currentDetail || isSame) {
+      mapAttemptedRef.current = true;
       setIsMapLoading(true);
-      generateMapImages(propName, propAddr).then(res => {
+      generateMapImages(propName, propAddr, data.property?.access, { detailZoom: 18 }).then(res => {
         setLocalWideMap(res.wideMapUrl);
         setLocalDetailMap(res.detailMapUrl);
         if (setAppState) {
@@ -76,9 +80,11 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
                 maps: {
                   ...prev.data.maps,
                   wideMapUrl: prev.data.maps?.wideMapUrl || res.wideMapUrl,
-                  detailMapUrl: prev.data.maps?.detailMapUrl || res.detailMapUrl,
-                  wideMapStatus: 'complete',
-                  detailMapStatus: 'complete',
+                  detailMapUrl: res.detailMapUrl || prev.data.maps?.detailMapUrl,
+                  wideZoom: res.wideZoom || prev.data.maps?.wideZoom || 16,
+                  detailZoom: res.detailZoom || prev.data.maps?.detailZoom || 18,
+                  wideMapStatus: res.isConfirmed ? 'complete' : 'failed',
+                  detailMapStatus: res.isConfirmed ? 'complete' : 'failed',
                   isConfirmed: res.isConfirmed,
                   method: res.method,
                   googleMapsUrl: getGoogleMapsUrl(propName, propAddr),
@@ -86,7 +92,7 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
                 images: {
                   ...prev.data.images,
                   map: prev.data.images?.map || res.wideMapUrl,
-                  detailMap: prev.data.images?.detailMap || res.detailMapUrl,
+                  detailMap: res.detailMapUrl || prev.data.images?.detailMap,
                 }
               }
             };
@@ -98,7 +104,7 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
         setIsMapLoading(false);
       });
     }
-  }, [data?.property?.name, data?.property?.address, data?.maps?.wideMapUrl, data?.maps?.detailMapUrl, images.map, images.detailMap, setAppState]);
+  }, [data?.property?.name, data?.property?.address, data?.property?.access, data?.maps?.wideMapUrl, data?.maps?.detailMapUrl, images.map, images.detailMap, setAppState]);
 
   if (!data) return null;
 

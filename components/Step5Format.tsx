@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppState, StaffPreset } from '@/types';
-import { Layout, Image as ImageIcon, Grid, Building2, User, Phone, Mail, UserPlus, Sparkles, Check, Layers, MapPin } from 'lucide-react';
-import { getStaffPresets } from '@/lib/storage';
+import { Layout, Image as ImageIcon, Grid, Building2, User, Phone, Mail, UserPlus, Sparkles, Check, Layers, MapPin, Link2, ShieldCheck, Crown } from 'lucide-react';
+import { getStaffPresets, fetchStaffPresetsFromCloud } from '@/lib/storage';
+import { auth } from '@/lib/firebase';
 import { assignSlotByFormat } from '@/utils/pdf';
 import StaffPresetModal from './StaffPresetModal';
 
@@ -59,7 +60,13 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
 
   useEffect(() => {
     setStaffPresets(getStaffPresets());
+    fetchStaffPresetsFromCloud().then(setStaffPresets).catch(() => {});
   }, [isStaffModalOpen]);
+
+  const currentUser = auth.currentUser;
+  const currentUserPreset = staffPresets.find(
+    p => currentUser && (p.googleEmail === currentUser.email || p.googleUid === currentUser.uid)
+  );
 
   const handleSelectFormat = (fmtId: 'JS-A' | 'JS-B' | 'JS-C' | 'JS-D') => {
     setAppState(prev => {
@@ -190,6 +197,26 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
           </button>
         </div>
 
+        {/* Logged in User Quick Banner */}
+        {currentUser && currentUserPreset && appState.jsContact.personName !== currentUserPreset.name && (
+          <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+              <p className="text-xs text-blue-900">
+                ログイン中のGoogleアカウントに紐づく担当者: <span className="font-bold">{currentUserPreset.name}</span> ({currentUserPreset.role || '営業担当'})
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleSelectPreset(currentUserPreset)}
+              className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg shadow-xs transition-colors shrink-0 flex items-center gap-1"
+            >
+              <Check className="w-3.5 h-3.5" />
+              ワンクリック適用
+            </button>
+          </div>
+        )}
+
         {/* Preset Chips */}
         {staffPresets.length > 0 && (
           <div className="space-y-1.5">
@@ -199,6 +226,7 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
             <div className="flex flex-wrap gap-2">
               {staffPresets.map((p) => {
                 const isSelected = appState.jsContact.personName === p.name;
+                const isCurrentUser = currentUser && (p.googleEmail === currentUser.email || p.googleUid === currentUser.uid);
                 return (
                   <button
                     key={p.id}
@@ -213,6 +241,29 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
                     <User className="w-3.5 h-3.5" />
                     <span>{p.name}</span>
                     <span className="text-[10px] opacity-80 font-mono">({p.tel})</span>
+                    {p.isAdmin && (
+                      <span className={`inline-flex items-center gap-0.5 text-[9px] px-1 py-0.2 rounded font-bold ${
+                        isSelected ? 'bg-amber-400 text-amber-950' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                      }`}>
+                        <Crown className="w-2.5 h-2.5 text-amber-600" />
+                        管理者
+                      </span>
+                    )}
+                    {p.googleEmail && (
+                      <span className={`inline-flex items-center gap-0.5 text-[9px] px-1 py-0.2 rounded font-mono ${
+                        isSelected ? 'bg-blue-700 text-blue-100' : 'bg-blue-100 text-blue-700'
+                      }`}>
+                        <Link2 className="w-2.5 h-2.5" />
+                        Google
+                      </span>
+                    )}
+                    {isCurrentUser && (
+                      <span className={`text-[9px] font-bold px-1 py-0.2 rounded ${
+                        isSelected ? 'bg-emerald-500 text-white' : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        あなた
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -267,6 +318,27 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
             </div>
           </div>
         </div>
+
+        {/* Selected Staff Google Link Info */}
+        {(() => {
+          const matchedPreset = staffPresets.find(p => p.name === appState.jsContact.personName);
+          if (matchedPreset?.googleEmail) {
+            return (
+              <div className="p-2.5 bg-emerald-50/70 border border-emerald-200 rounded-lg flex items-center justify-between text-xs text-emerald-900">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    Googleアカウント連携済み: <span className="font-mono font-bold">{matchedPreset.googleEmail}</span>
+                  </span>
+                </div>
+                <span className="text-[10px] text-emerald-700 bg-white px-2 py-0.5 rounded border border-emerald-200 font-medium">
+                  Cloud同期有効
+                </span>
+              </div>
+            );
+          }
+          return null;
+        })()}
       </div>
 
       {/* Navigation */}

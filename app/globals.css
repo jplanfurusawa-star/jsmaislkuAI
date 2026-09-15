@@ -1,1 +1,15 @@
 @import "tailwindcss";
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Meiryo", "Noto Sans JP", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* html2canvas FontMetrics baseline calculation fix:
+   Tailwind's img { display: block } causes html2canvas metric helper <img> to break onto a new line,
+   resulting in corrupted font baselines and chopped/split text.
+*/
+body > div:last-child img {
+  display: inline-block !important;
+}
