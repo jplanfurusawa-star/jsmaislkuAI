@@ -56,6 +56,21 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "name", "tel"]
+    },
+    "app_settings": {
+      "title": "Application and Format Settings",
+      "description": "Company-wide format settings, default template, color theme, and contact master",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "defaultFormat": { "type": "string" },
+        "brandColorTheme": { "type": "string" },
+        "formats": { "type": "array" },
+        "companyContact": { "type": "object" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["defaultFormat"]
     }
   },
   "storage": {

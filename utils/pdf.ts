@@ -399,7 +399,7 @@ export async function extractAndClassifyImagesFromPdf(dataUrl: string): Promise<
     const extractedImages: ExtractedImage[] = [];
     const seenHashes = new Set<string>();
 
-    const numPages = Math.min(pdf.numPages, 6);
+    const numPages = Math.min(pdf.numPages, 20);
 
     for (let pageNum = 1; pageNum <= numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
@@ -655,7 +655,7 @@ export async function extractImagesFromPdf(dataUrl: string): Promise<string[]> {
  */
 export function assignSlotByFormat(
   classifiedImages: ExtractedImage[],
-  format: 'JS-A' | 'JS-B' | 'JS-C' | 'JS-D' = 'JS-B'
+  format: string = 'JS-B'
 ): {
   main: string;
   floorPlan: string;
@@ -771,10 +771,11 @@ export async function downloadExtractedImagesZip(
 /**
  * PDFの各ページからテキストレイヤーを抽出し、同時に高解像度JPEGとしてレンダリング
  * AI（Gemini）解析用のテキスト＋視覚画像のハイブリッド入力を生成
+ * 平面図ベクターページも高精細画像として確実に取得
  */
-export async function extractPdfTextAndRenderPages(dataUrl: string, maxPages = 4): Promise<{
+export async function extractPdfTextAndRenderPages(dataUrl: string, maxPages = 20): Promise<{
   fullText: string;
-  pageImages: { mimeType: string; data: string }[];
+  pageImages: { mimeType: string; data: string; pageNumber: number; pageText: string }[];
 }> {
   try {
     const pdfjsLib = await import('pdfjs-dist');
@@ -785,25 +786,27 @@ export async function extractPdfTextAndRenderPages(dataUrl: string, maxPages = 4
     const pageCount = Math.min(pdf.numPages, maxPages);
 
     let fullText = '';
-    const pageImages: { mimeType: string; data: string }[] = [];
+    const pageImages: { mimeType: string; data: string; pageNumber: number; pageText: string }[] = [];
 
     for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
       const page = await pdf.getPage(pageNum);
 
       // 1. テキストレイヤーの抽出
+      let pageText = '';
       try {
         const textContent = await page.getTextContent();
         const textItems = textContent.items
-          .map((item: any) => item.str || '')
+          .map((item: any) => (typeof item?.str === 'string' ? item.str : ''))
           .filter(Boolean);
-        if (textItems.length > 0) {
-          fullText += `\n[--- PDF ページ ${pageNum} のテキスト ---]\n` + textItems.join(' ');
+        pageText = textItems.join(' ').replace(/\s+/g, ' ').trim();
+        if (pageText) {
+          fullText += `\n[--- PDF ページ ${pageNum} のテキスト ---]\n` + pageText;
         }
       } catch (textErr) {
         console.warn(`Page ${pageNum} text extraction failed`, textErr);
       }
 
-      // 2. ページ全体の高精細レンダリング (1.4倍スケール: Vercelの4.5MBリクエスト上限を回避しつつ高精度OCRを維持)
+      // 2. ページ全体の高精細レンダリング (1.4倍スケール: Vercelの4.5MBリクエスト上限を回避しつつ高精度OCRと鮮明な平面図出力を維持)
       try {
         const viewport = page.getViewport({ scale: 1.4 });
         const canvas = document.createElement('canvas');
@@ -812,12 +815,14 @@ export async function extractPdfTextAndRenderPages(dataUrl: string, maxPages = 4
         const ctx = canvas.getContext('2d');
         if (ctx) {
           await (page.render as any)({ canvasContext: ctx, viewport, canvas }).promise;
-          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.80);
+          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.85);
           const base64Data = jpegDataUrl.split(',')[1];
           if (base64Data) {
             pageImages.push({
               mimeType: 'image/jpeg',
-              data: base64Data
+              data: base64Data,
+              pageNumber: pageNum,
+              pageText,
             });
           }
         }
@@ -832,3 +837,83 @@ export async function extractPdfTextAndRenderPages(dataUrl: string, maxPages = 4
     return { fullText: '', pageImages: [] };
   }
 }
+
+/**
+ * マイソク見本ファイル（PDFまたは画像）を解析用の画像データURLとテキスト情報に変換
+ */
+export async function prepareSampleFormatForAnalysis(file: File): Promise<{
+  previewDataUrl: string;
+  mimeType: string;
+  pdfText: string;
+  fileName: string;
+}> {
+  const fileName = file.name;
+  const isPdf = file.type === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
+
+  if (!isPdf) {
+    // 画像ファイルの場合 (PNG, JPEG, WebP)
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const previewDataUrl = reader.result as string;
+        resolve({
+          previewDataUrl,
+          mimeType: file.type || 'image/jpeg',
+          pdfText: '',
+          fileName,
+        });
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // PDFファイルの場合: 1ページ目をレンダリング
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const dataUrl = reader.result as string;
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+        const loadingTask = pdfjsLib.getDocument({ url: dataUrl });
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+
+        // テキスト抽出
+        let pdfText = '';
+        try {
+          const textContent = await page.getTextContent();
+          pdfText = textContent.items.map((it: any) => it.str || '').filter(Boolean).join(' ');
+        } catch (e) {
+          console.warn("Sample PDF text extraction error", e);
+        }
+
+        // 高解像度レンダリング (scale 1.5)
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas 2Dコンテキストが取得できませんでした');
+
+        await (page.render as any)({ canvasContext: ctx, viewport, canvas }).promise;
+        const previewDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+        resolve({
+          previewDataUrl,
+          mimeType: 'image/jpeg',
+          pdfText,
+          fileName,
+        });
+      } catch (err) {
+        console.error("Failed to render PDF page 1 for sample analysis", err);
+        reject(err);
+      }
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+

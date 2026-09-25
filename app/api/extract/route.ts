@@ -431,6 +431,67 @@ export async function POST(req: NextRequest) {
       3. ACCESS（地図）:
          ・現地案内図、周辺地図、アクセスマップ（category: 'ACCESS', subCategory: '現地案内図'）。
       
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      【最重要：複数フロア・複数区画・複数平面図の配列抽出ルール】
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      1物件に複数の募集フロア・複数区画・複数平面図が存在することを前提として設計してください。
+      「1物件＝1区画＝1平面図」として処理してはいけません！
+      
+      例:
+        1F 20.00坪
+        2F 30.00坪
+        元資料内に1F平面図、2F平面図がそれぞれ存在する場合、
+        必ず 1F 20.00坪 → 1F平面図（plan_1F）、2F 30.00坪 → 2F平面図（plan_2F）として紐付けてください。
+        片方の平面図のみを使用したり、同じ平面図を両フロアへ使い回すことは厳禁です！
+
+      1. units（募集区画配列）:
+         ・必ず配列（units: [...]）で抽出してください。
+         ・同一フロアに複数区画がある場合（例: 1F A区画 10坪、1F B区画 15坪）:
+           unitId: "1F-A", unitId: "1F-B" のように個別に分離してください（勝手に合算しない）。
+         ・各区画のプロパティ:
+           - unitId: "1F", "2F", "1F-A", "1F-B" 等の区画識別子
+           - floor: "1F", "2F", "B1F" 等
+           - unitName: "A区画", "101号室", "南側" 等
+           - areaSqm / areaTsubo: 当該区画の面積（数値）
+           - rent: 当該区画の月額賃料（数値または円表記）
+           - rentTsuboPrice: 当該区画の坪単価
+           - commonFee: 当該区画の共益費
+           - commonFeeTsuboPrice: 当該区画の共益費坪単価
+           - deposit: 保証金・敷金
+           - keyMoney: 礼金
+           - contractType: 契約期間・形態
+           - handoverCondition: 引渡状態（スケルトン、居抜き等）
+           - handoverDate: 引渡時期（即時、相談等）
+           - planAssetId: 紐付く平面図の assetId（例: "plan_1F"）
+           - status: "available"
+           - linkStatus: "linked" または "needs_review"
+
+      2. plans（平面図配列）:
+         ・資料内に存在するすべての平面図を配列（plans: [...]）で抽出してください。
+         ・各平面図のプロパティ:
+           - assetId: "plan_1F", "plan_2F", "plan_1F_A" などの一意識別子
+           - floor: "1F", "2F" など
+           - unitName: "A区画" など
+           - areaTsubo / areaSqm: 平面図内に記載されている面積数値
+           - sourcePage: 元資料のページ番号（1始まり）
+           - caption: キャプション（例: "1階 区画平面図"）
+           - matchedUnitId: 紐付いた募集区画の unitId（例: "1F"）
+           - confidence: "high" | "medium" | "low"（判定確信度）
+
+      3. 平面図と区画の自動紐付け優先順位:
+         1. 平面図内に明記された階数（1F、2F、B1Fなど）
+         2. 平面図内に明記された区画番号・号室（A区画、101など）
+         3. 平面図内に明記された面積（20.00坪、66.12㎡など）
+         4. 募集条件表に記載された階数と面積
+         5. 元PDFのページタイトル（例: 「1F平面図」）
+         6. 元PDFのページ順
+         ※ 上記で確定できない曖昧な場合は、勝手に確定させず confidence: "low", matchedUnitId: null としてください。
+
+      4. leasePatterns（一括貸し・分割パターン）:
+         ・元資料に一括貸し（例: 1F・2F一括 50坪）の記載がある場合、個別の区画（1F, 2F）を units に保持した上で、
+           leasePatterns 配列に patternId: "ALL", name: "1F・2F一括", unitIds: ["1F", "2F"], totalTsubo: 50.00 を抽出してください。
+         ・一括貸しの記載がないのに勝手に合算区画を作ってはなりません。
+
       【絶対に抽出・混入させてはならない禁止対象】
       ・「募集条件の表」「賃料・敷金の文字表」「物件概要のテキスト領域」は絶対に PHOTO や PLAN として抽出しないこと！
       ・「会社情報」「仲介会社ロゴ」「ロゴマーク」は PHOTO や PLAN として抽出しないこと（category: 'OTHER', subCategory: '会社ロゴ'）！
@@ -441,6 +502,66 @@ export async function POST(req: NextRequest) {
     const schema = {
       type: Type.OBJECT,
       properties: {
+        units: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              unitId: { type: Type.STRING },
+              floor: { type: Type.STRING },
+              unitName: { type: Type.STRING },
+              areaSqm: { type: Type.NUMBER, nullable: true },
+              areaTsubo: { type: Type.NUMBER, nullable: true },
+              rent: { type: Type.NUMBER, nullable: true },
+              rentTsuboPrice: { type: Type.NUMBER, nullable: true },
+              commonFee: { type: Type.NUMBER, nullable: true },
+              commonFeeTsuboPrice: { type: Type.NUMBER, nullable: true },
+              deposit: { type: Type.STRING },
+              keyMoney: { type: Type.STRING },
+              contractType: { type: Type.STRING },
+              handoverCondition: { type: Type.STRING },
+              handoverDate: { type: Type.STRING },
+              planAssetId: { type: Type.STRING },
+              status: { type: Type.STRING },
+              linkStatus: { type: Type.STRING },
+            }
+          }
+        },
+        plans: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              assetId: { type: Type.STRING },
+              floor: { type: Type.STRING },
+              unitName: { type: Type.STRING },
+              areaTsubo: { type: Type.NUMBER, nullable: true },
+              areaSqm: { type: Type.NUMBER, nullable: true },
+              sourcePage: { type: Type.NUMBER },
+              caption: { type: Type.STRING },
+              matchedUnitId: { type: Type.STRING },
+              confidence: { type: Type.STRING },
+            }
+          }
+        },
+        leasePatterns: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              patternId: { type: Type.STRING },
+              name: { type: Type.STRING },
+              unitIds: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              totalTsubo: { type: Type.NUMBER, nullable: true },
+              totalSqm: { type: Type.NUMBER, nullable: true },
+              totalRent: { type: Type.NUMBER, nullable: true },
+              totalCommonFee: { type: Type.NUMBER, nullable: true },
+            }
+          }
+        },
         property: {
           type: Type.OBJECT,
           properties: {
@@ -643,6 +764,215 @@ export async function POST(req: NextRequest) {
             result.rent.tsuboPrice = calculatedTsuboPrice;
           }
         }
+      }
+
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // 【複数フロア・複数区画・複数平面図の整合性＆自動紐付けエンジン】
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // 1. plans 配列の正規化
+      if (!Array.isArray(result.plans)) {
+        result.plans = [];
+      }
+
+      // もし visualElements に PLAN カテゴリがあるのに plans 配列が空の場合、補完
+      if (result.plans.length === 0 && Array.isArray(result.visualElements)) {
+        const planVisuals = result.visualElements.filter(
+          (ve: any) => ve.category === 'PLAN' || (ve.subCategory && ve.subCategory.includes('平面図'))
+        );
+        planVisuals.forEach((pv: any, pIdx: number) => {
+          const rawLabel = pv.label || '';
+          const floorMatch = rawLabel.match(/(?:B\d+|\d+)[F階]/i);
+          const detectedFloor = floorMatch ? floorMatch[0].toUpperCase().replace('階', 'F') : (pIdx === 0 ? '1F' : `${pIdx + 1}F`);
+          const assetId = `plan_${detectedFloor.replace(/[^a-zA-Z0-9]/g, '_')}_${pIdx + 1}`;
+          result.plans.push({
+            assetId,
+            floor: detectedFloor,
+            unitName: rawLabel.includes('区画') ? rawLabel : '',
+            areaTsubo: null,
+            areaSqm: null,
+            sourcePage: typeof pv.fileIndex === 'number' ? pv.fileIndex + 1 : 1,
+            caption: rawLabel || `${detectedFloor} 平面図`,
+            matchedUnitId: null,
+            confidence: 'medium',
+          });
+        });
+      }
+
+      // 各 plan の assetId 保証
+      result.plans.forEach((p: any, idx: number) => {
+        if (!p.assetId) {
+          const fl = (p.floor || `${idx + 1}F`).replace(/[^a-zA-Z0-9]/g, '_');
+          p.assetId = `plan_${fl}_${idx + 1}`;
+        }
+      });
+
+      // 2. units 配列の正規化（単一オブジェクト禁止、必ず配列で管理）
+      if (!Array.isArray(result.units) || result.units.length === 0) {
+        result.units = [{
+          unitId: (result.property?.floor || result.property?.room || '1F').trim() || '1F',
+          floor: (result.property?.floor || '1F').trim() || '1F',
+          unitName: (result.property?.room || '').trim(),
+          areaSqm: result.area?.sqm ?? null,
+          areaTsubo: result.area?.tsubo ?? null,
+          rent: result.rent?.amount ?? null,
+          rentTsuboPrice: result.rent?.tsuboPrice ?? null,
+          commonFee: result.commonFee?.amount ?? null,
+          commonFeeTsuboPrice: result.commonFee?.tsuboPrice ?? null,
+          deposit: result.deposit || '',
+          keyMoney: result.keyMoney || '',
+          contractType: result.contract || '',
+          handoverCondition: result.property?.handoverStatus || '',
+          handoverDate: result.property?.handoverTiming || '',
+          planAssetId: result.plans[0]?.assetId || null,
+          status: 'available',
+          linkStatus: result.plans.length > 0 ? 'linked' : 'no_plan',
+        }];
+      } else {
+        // 各 unit の基本値補正
+        result.units.forEach((unit: any, uIdx: number) => {
+          if (!unit.unitId) {
+            unit.unitId = `${unit.floor || `${uIdx + 1}F`}${unit.unitName ? `-${unit.unitName}` : ''}`;
+          }
+          if (!unit.floor) {
+            unit.floor = `${uIdx + 1}F`;
+          }
+          unit.status = unit.status || 'available';
+
+          // 坪単価の自動計算補完
+          if ((!unit.rentTsuboPrice || unit.rentTsuboPrice === 0) && unit.rent && unit.areaTsubo && unit.areaTsubo > 0) {
+            const rVal = typeof unit.rent === 'number' ? unit.rent : parseFloat(String(unit.rent).replace(/[^0-9.]/g, ''));
+            if (!isNaN(rVal) && rVal > 0) {
+              unit.rentTsuboPrice = Math.round(rVal / unit.areaTsubo);
+            }
+          }
+        });
+      }
+
+      // 3. 【優先順位 1〜6 に基づく平面図と区画の厳格な紐付けエンジン】
+      // 1. 平面図内に記載された階数（1F, 2F, B1F）
+      // 2. 平面図内に記載された区画番号・号室（A区画, 101）
+      // 3. 平面図内に記載された面積（20.00坪, 66.12㎡など）
+      // 4. 募集条件表に記載された階数と面積
+      // 5. 元PDFのページタイトル（例: 「1F平面図」）
+      // 6. 元PDFのページ順
+      const normalizeFloorStr = (f: string) => (f || '').toUpperCase().replace(/階/g, 'F').replace(/地下/g, 'B').trim();
+
+      // 各 plan について最も合致する unit を探索
+      const usedPlanIds = new Set<string>();
+
+      result.units.forEach((unit: any) => {
+        const uFloorNorm = normalizeFloorStr(unit.floor);
+        const uName = (unit.unitName || '').toLowerCase().trim();
+        const uTsubo = typeof unit.areaTsubo === 'number' ? unit.areaTsubo : null;
+        const uSqm = typeof unit.areaSqm === 'number' ? unit.areaSqm : null;
+
+        // 候補プランのスコアリング
+        let bestPlan: any = null;
+        let highestScore = 0;
+        let isAmbiguous = false;
+
+        result.plans.forEach((plan: any) => {
+          let score = 0;
+          const pFloorNorm = normalizeFloorStr(plan.floor);
+          const pUnitName = (plan.unitName || '').toLowerCase().trim();
+          const pCaption = (plan.caption || '').toLowerCase().trim();
+
+          // 1. 階数完全一致
+          if (uFloorNorm && pFloorNorm && (uFloorNorm === pFloorNorm || pCaption.includes(uFloorNorm.toLowerCase()))) {
+            score += 100;
+          }
+
+          // 2. 区画番号・号室一致
+          if (uName && (pUnitName === uName || pCaption.includes(uName))) {
+            score += 80;
+          }
+
+          // 3. 面積一致（±2%以内）
+          if (uTsubo && plan.areaTsubo) {
+            const diffRatio = Math.abs(uTsubo - plan.areaTsubo) / uTsubo;
+            if (diffRatio < 0.02) score += 60;
+            else if (diffRatio < 0.06) score += 30;
+          }
+          if (uSqm && plan.areaSqm) {
+            const diffRatio = Math.abs(uSqm - plan.areaSqm) / uSqm;
+            if (diffRatio < 0.02) score += 60;
+            else if (diffRatio < 0.06) score += 30;
+          }
+
+          // 4. 既に AI が指定した planAssetId がある場合
+          if (unit.planAssetId && unit.planAssetId === plan.assetId) {
+            score += 40;
+          }
+
+          if (score > highestScore) {
+            highestScore = score;
+            bestPlan = plan;
+            isAmbiguous = false;
+          } else if (score > 0 && score === highestScore) {
+            isAmbiguous = true;
+          }
+        });
+
+        // 紐付け結果の反映
+        if (bestPlan && highestScore >= 100 && !isAmbiguous && !usedPlanIds.has(bestPlan.assetId)) {
+          unit.planAssetId = bestPlan.assetId;
+          bestPlan.matchedUnitId = unit.unitId;
+          bestPlan.confidence = highestScore >= 160 ? 'high' : 'medium';
+          unit.linkStatus = 'linked';
+          usedPlanIds.add(bestPlan.assetId);
+        } else if (bestPlan && isAmbiguous) {
+          unit.planAssetId = bestPlan.assetId;
+          bestPlan.matchedUnitId = unit.unitId;
+          bestPlan.confidence = 'low';
+          unit.linkStatus = 'needs_review';
+        } else if (result.plans.length === 1 && result.units.length === 1) {
+          // 1件対1件の自然一致
+          unit.planAssetId = result.plans[0].assetId;
+          result.plans[0].matchedUnitId = unit.unitId;
+          result.plans[0].confidence = 'high';
+          unit.linkStatus = 'linked';
+          usedPlanIds.add(result.plans[0].assetId);
+        } else {
+          unit.linkStatus = result.plans.length > 0 ? 'needs_review' : 'no_plan';
+        }
+      });
+
+      // 4. 複数区画の合算サマリーの同期（units が複数ある場合、合計坪数・平米数と内訳テキストを全体に自動反映）
+      if (result.units.length > 1) {
+        let totalSqm = 0;
+        let totalTsubo = 0;
+        const breakdownParts: string[] = [];
+        const floorList: string[] = [];
+
+        result.units.forEach((u: any) => {
+          if (typeof u.areaSqm === 'number' && !isNaN(u.areaSqm)) totalSqm += u.areaSqm;
+          if (typeof u.areaTsubo === 'number' && !isNaN(u.areaTsubo)) totalTsubo += u.areaTsubo;
+          const uLabel = u.floor ? (u.unitName ? `${u.floor} ${u.unitName}` : u.floor) : u.unitId;
+          if (u.areaTsubo) {
+            breakdownParts.push(`${uLabel}：${u.areaSqm ? `${u.areaSqm.toFixed(2)}㎡（` : ''}${u.areaTsubo.toFixed(2)}坪${u.areaSqm ? '）' : ''}`);
+          }
+          if (u.floor && !floorList.includes(u.floor)) {
+            floorList.push(u.floor);
+          }
+        });
+
+        if (totalTsubo > 0) {
+          result.area = result.area || {};
+          result.area.tsubo = Math.round(totalTsubo * 100) / 100;
+          if (totalSqm > 0) {
+            result.area.sqm = Math.round(totalSqm * 100) / 100;
+          }
+          result.area.breakdownText = breakdownParts.join(' / ');
+        }
+
+        if (floorList.length > 0 && result.property) {
+          result.property.floor = floorList.join('・');
+        }
+      }
+
+      // 5. leasePatterns の保証
+      if (!Array.isArray(result.leasePatterns)) {
+        result.leasePatterns = [];
       }
 
       // Save to memory cache

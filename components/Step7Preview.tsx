@@ -418,6 +418,7 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
                       <JsBPlanSlide
                         planLabel={slide.planLabel || '平面図'}
                         planUrl={slide.planUrl}
+                        unitInfo={slide.unitInfo}
                       />
                     )}
                   </div>

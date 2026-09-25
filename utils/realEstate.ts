@@ -73,17 +73,28 @@ export function generateProposalEmail(data: PropertyData, jsContact: AppState['j
   const googleMapsUrl = customUrl || getGoogleMapsUrl(property.name, property.address);
 
   // 階数・面積 (例: 3階301号室／49.02㎡（14.80坪）)
-  const floorPart = [property.floor ? `${property.floor}` : '', property.room ? `${property.room}号室` : ''].filter(Boolean).join(' ');
-  const areaPart = [
-    area.sqm !== null && area.sqm !== undefined ? `${area.sqm}㎡` : '',
-    area.tsubo !== null && area.tsubo !== undefined ? `（${area.tsubo}坪）` : ''
-  ].filter(Boolean).join('');
-  
   let floorAndArea = '―';
-  if (floorPart && areaPart) {
-    floorAndArea = `${floorPart}／${areaPart}`;
-  } else if (floorPart || areaPart) {
-    floorAndArea = `${floorPart}${areaPart}`;
+  if (data.units && data.units.length > 1) {
+    const unitLines = data.units.map(u => {
+      const f = u.floor || u.unitId;
+      const r = u.unitName ? ` ${u.unitName}` : '';
+      const a = u.areaTsubo ? `／${u.areaTsubo}坪${u.areaSqm ? `（${u.areaSqm}㎡）` : ''}` : '';
+      const rentInfo = u.rent ? `／賃料: ${typeof u.rent === 'number' ? `${u.rent.toLocaleString()}円` : u.rent}` : '';
+      return `・${f}${r} ${a} ${rentInfo}`.trim();
+    }).join('\n');
+    floorAndArea = `複数区画募集（全${data.units.length}区画）\n${unitLines}`;
+  } else {
+    const floorPart = [property.floor ? `${property.floor}` : '', property.room ? `${property.room}号室` : ''].filter(Boolean).join(' ');
+    const areaPart = [
+      area.sqm !== null && area.sqm !== undefined ? `${area.sqm}㎡` : '',
+      area.tsubo !== null && area.tsubo !== undefined ? `（${area.tsubo}坪）` : ''
+    ].filter(Boolean).join('');
+    
+    if (floorPart && areaPart) {
+      floorAndArea = `${floorPart}／${areaPart}`;
+    } else if (floorPart || areaPart) {
+      floorAndArea = `${floorPart}${areaPart}`;
+    }
   }
 
   // 契約形態 (例: 定期借家3年、普通借家等)
@@ -779,6 +790,26 @@ export async function downloadPowerPointPresentation(
           color: '20B26C',
           valign: 'middle',
         });
+
+        if (slideDef.unitInfo) {
+          const parts: string[] = [];
+          if (slideDef.unitInfo.areaTsubo) parts.push(`面積: ${slideDef.unitInfo.areaTsubo}坪${slideDef.unitInfo.areaSqm ? ` (${slideDef.unitInfo.areaSqm}㎡)` : ''}`);
+          if (slideDef.unitInfo.rent) parts.push(`賃料: ${typeof slideDef.unitInfo.rent === 'number' ? `${slideDef.unitInfo.rent.toLocaleString()}円` : slideDef.unitInfo.rent}`);
+          if (parts.length > 0) {
+            slide.addText(parts.join('  |  '), {
+              x: 6.8,
+              y: 0.48,
+              w: 3.5,
+              h: 0.45,
+              fontSize: 10,
+              bold: true,
+              color: '065F46',
+              align: 'right',
+              valign: 'middle',
+            });
+          }
+        }
+
         slide.addText('J.square', {
           x: 10.5,
           y: 0.45,

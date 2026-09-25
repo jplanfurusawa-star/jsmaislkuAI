@@ -68,6 +68,23 @@ export function cleanVal(val: string | undefined | null, fallback: string = '―
 
 // 賃貸面積の表示整形
 export function formatRentalArea(data: PropertyData): string {
+  // 複数区画（units）がある場合
+  if (data.units && data.units.length > 1) {
+    const totalTsubo = data.units.reduce((sum, u) => sum + (u.areaTsubo || 0), 0);
+    const totalSqm = data.units.reduce((sum, u) => sum + (u.areaSqm || 0), 0);
+    const breakdown = data.units
+      .map(u => `${u.floor || u.unitId}: ${u.areaTsubo ? `${u.areaTsubo}坪` : ''}${u.areaSqm ? ` (${u.areaSqm}㎡)` : ''}`.trim())
+      .filter(Boolean)
+      .join(' / ');
+    if (totalTsubo > 0 || totalSqm > 0) {
+      return `合計 ${totalTsubo > 0 ? `${totalTsubo.toFixed(2)}坪` : ''}${totalSqm > 0 ? ` (${totalSqm.toFixed(2)}㎡)` : ''} [${breakdown}]`;
+    }
+  }
+
+  if (data.area?.breakdownText) {
+    return data.area.breakdownText;
+  }
+
   if (data.area?.sqm || data.area?.tsubo) {
     const parts: string[] = [];
     if (data.area.sqm) parts.push(`${data.area.sqm}㎡`);
@@ -85,6 +102,15 @@ export function formatRentalArea(data: PropertyData): string {
 
 // 賃料の表示整形（月額総額と坪単価を明確に併記）
 export function formatRent(data: PropertyData): string {
+  if (data.units && data.units.length > 1) {
+    const unitRents = data.units
+      .filter(u => u.rent !== undefined && u.rent !== null && u.rent !== '')
+      .map(u => `${u.floor || u.unitId}: ${typeof u.rent === 'number' ? `${u.rent.toLocaleString()}円` : u.rent}`);
+    if (unitRents.length > 0) {
+      return unitRents.join(' / ');
+    }
+  }
+
   if (data.rent?.amount && data.rent?.tsuboPrice) {
     return `${data.rent.amount.toLocaleString()}円（約${data.rent.tsuboPrice.toLocaleString()}円/坪）`;
   }
@@ -122,6 +148,14 @@ export interface JsBSlideItem {
   // PLANスライド用の追加情報
   planLabel?: string;
   planUrl?: string;
+  unitInfo?: {
+    floor?: string;
+    unitName?: string;
+    areaTsubo?: number | null;
+    areaSqm?: number | null;
+    rent?: number | string | null;
+    commonFee?: number | string | null;
+  };
 }
 
 /**
@@ -623,55 +657,130 @@ export function extractJsBMedia(
   const photos = photoSelection.displayPhotos;
   const candidatePhotos = photoSelection.allCandidates;
 
-  // 平面図・間取り図の収集
-  const planItems: { id: string; label: string; url: string }[] = [];
+  // 平面図・間取り図の収集（複数フロア・複数区画・複数平面図対応【最重要】）
+  const planItems: {
+    id: string;
+    label: string;
+    url?: string;
+    unitInfo?: {
+      floor?: string;
+      unitName?: string;
+      areaTsubo?: number | null;
+      areaSqm?: number | null;
+      rent?: number | string | null;
+      commonFee?: number | string | null;
+    };
+  }[] = [];
   const seenUrls = new Set<string>();
 
-  const planObjs = [
-    ...(appState.extractedImages || []),
-    ...(data.images?.classifiedList || [])
-  ].filter(img => img.category === 'PLAN' && img.dataUrl);
+  // 1. 複数区画（data.units）が存在する場合を最優先
+  if (data?.units && data.units.length > 0) {
+    data.units.forEach((unit, uIdx) => {
+      // 紐付けられた平面図（planAssetId または floor 一致）を検索
+      const matchedPlan = (data.plans || []).find(p => p.assetId === unit.planAssetId)
+        || (data.plans || []).find(p => p.floor && unit.floor && p.floor.trim().toLowerCase() === unit.floor.trim().toLowerCase());
+      
+      let planUrl = matchedPlan?.imagePath;
 
-  planObjs.forEach((p, idx) => {
-    if (!seenUrls.has(p.dataUrl)) {
-      seenUrls.add(p.dataUrl);
-      let rawLabel = (p.label || '').trim();
-      let label = rawLabel;
-
-      // 「平面図 (1F・B1F)」や「平面図(1F)」などから階数・区画名部分を優先抽出
-      const floorMatch = rawLabel.match(/(?:平面図|間取図|間取り図|図面|区画図)?\s*[(（]?\s*([0-9A-Za-z・/／~〜\-\s]+(?:F|階|区画|号室)?)\s*[)）]?/);
-      if (
-        !rawLabel ||
-        rawLabel === 'PLAN' ||
-        rawLabel === '間取り図' ||
-        rawLabel === '平面図' ||
-        rawLabel === '区画図' ||
-        rawLabel === '平面図・間取図'
-      ) {
-        label = data.property?.floor ? `${data.property.floor}` : `第${planItems.length + 1}区画`;
-      } else if (floorMatch && floorMatch[1] && /[0-9A-Za-zF階]/.test(floorMatch[1])) {
-        label = floorMatch[1].trim();
-      } else if (data.property?.floor) {
-        label = data.property.floor;
+      // 該当画像URLが直接ない場合、extractedImages または classifiedList から探す
+      if (!planUrl && unit.planAssetId) {
+        const foundInClassified = [
+          ...(appState.extractedImages || []),
+          ...(data.images?.classifiedList || [])
+        ].find(img => img.id === unit.planAssetId || img.dataUrl === unit.planAssetId);
+        if (foundInClassified) {
+          planUrl = foundInClassified.dataUrl;
+        }
       }
 
+      // 単一区画かつ未指定の場合、プライマリ平面図を使用
+      if (!planUrl && data.units && data.units.length === 1) {
+        planUrl = images.floorPlan || data.images?.floorPlan;
+      }
+
+      const floorLabel = unit.floor || `区画 ${uIdx + 1}`;
+      const nameLabel = unit.unitName ? ` ${unit.unitName}` : '';
+      const areaLabel = unit.areaTsubo ? ` (${unit.areaTsubo}坪)` : '';
+      const displayLabel = `${floorLabel}${nameLabel}${areaLabel}`.trim();
+
       planItems.push({
-        id: p.id || `plan-${idx}`,
-        label,
-        url: p.dataUrl,
+        id: `unit_plan_${unit.unitId || uIdx}`,
+        label: displayLabel,
+        url: planUrl,
+        unitInfo: {
+          floor: unit.floor,
+          unitName: unit.unitName,
+          areaTsubo: unit.areaTsubo,
+          areaSqm: unit.areaSqm,
+          rent: unit.rent,
+          commonFee: unit.commonFee,
+        },
+      });
+
+      if (planUrl) seenUrls.add(planUrl);
+    });
+
+    // どの区画にも紐付いていない独立した平面図があれば、スライドとして追加
+    if (data.plans && data.plans.length > 0) {
+      data.plans.forEach((p, pIdx) => {
+        if (p.imagePath && !seenUrls.has(p.imagePath)) {
+          seenUrls.add(p.imagePath);
+          planItems.push({
+            id: p.assetId || `plan_extra_${pIdx}`,
+            label: p.caption || (p.floor ? `${p.floor} 平面図` : `平面図 ${planItems.length + 1}`),
+            url: p.imagePath,
+          });
+        }
       });
     }
-  });
+  } else {
+    // 2. 従来のフォールバック処理（extractedImages または classifiedList）
+    const planObjs = [
+      ...(appState.extractedImages || []),
+      ...(data.images?.classifiedList || [])
+    ].filter(img => img.category === 'PLAN' && img.dataUrl);
 
-  const primaryPlan = images.floorPlan || data.images?.floorPlan;
-  if (primaryPlan && !seenUrls.has(primaryPlan)) {
-    seenUrls.add(primaryPlan);
-    const label = data.property?.floor ? `${data.property.floor}` : (planItems.length === 0 ? '1F・B1F' : `第${planItems.length + 1}区画`);
-    planItems.unshift({
-      id: 'primary-plan',
-      label,
-      url: primaryPlan,
+    planObjs.forEach((p, idx) => {
+      if (!seenUrls.has(p.dataUrl)) {
+        seenUrls.add(p.dataUrl);
+        let rawLabel = (p.label || '').trim();
+        let label = rawLabel;
+
+        // 「平面図 (1F・B1F)」や「平面図(1F)」などから階数・区画名部分を優先抽出
+        const floorMatch = rawLabel.match(/(?:平面図|間取図|間取り図|図面|区画図)?\s*[(（]?\s*([0-9A-Za-z・/／~〜\-\s]+(?:F|階|区画|号室)?)\s*[)）]?/);
+        if (
+          !rawLabel ||
+          rawLabel === 'PLAN' ||
+          rawLabel === '間取り図' ||
+          rawLabel === '平面図' ||
+          rawLabel === '区画図' ||
+          rawLabel === '平面図・間取図'
+        ) {
+          label = data.property?.floor ? `${data.property.floor}` : `第${planItems.length + 1}区画`;
+        } else if (floorMatch && floorMatch[1] && /[0-9A-Za-zF階]/.test(floorMatch[1])) {
+          label = floorMatch[1].trim();
+        } else if (data.property?.floor) {
+          label = data.property.floor;
+        }
+
+        planItems.push({
+          id: p.id || `plan-${idx}`,
+          label,
+          url: p.dataUrl,
+        });
+      }
     });
+
+    const primaryPlan = images.floorPlan || data.images?.floorPlan;
+    if (primaryPlan && !seenUrls.has(primaryPlan)) {
+      seenUrls.add(primaryPlan);
+      const label = data.property?.floor ? `${data.property.floor}` : (planItems.length === 0 ? '1F・B1F' : `第${planItems.length + 1}区画`);
+      planItems.unshift({
+        id: 'primary-plan',
+        label,
+        url: primaryPlan,
+      });
+    }
   }
 
   return {
@@ -749,6 +858,7 @@ export function getJsBSlides(
         title: `PLAN：${plan.label}`,
         planLabel: plan.label,
         planUrl: plan.url,
+        unitInfo: plan.unitInfo,
       });
     });
   } else {
@@ -982,8 +1092,18 @@ export function buildDynamicPropertyDetailItems(
   add('所在地', data.property?.address);
   add('最寄駅', data.property?.access);
 
-  const floorRoom = [data.property?.floor, data.property?.room].filter(Boolean).join(' ');
-  if (floorRoom) add('階数・区画', floorRoom);
+  if (data.units && data.units.length > 1) {
+    const unitList = data.units.map(u => {
+      const f = u.floor || u.unitId;
+      const n = u.unitName ? ` ${u.unitName}` : '';
+      const a = u.areaTsubo ? ` (${u.areaTsubo}坪)` : '';
+      return `${f}${n}${a}`.trim();
+    }).join('、');
+    add('募集フロア・区画', `${unitList}（全${data.units.length}区画）`);
+  } else {
+    const floorRoom = [data.property?.floor, data.property?.room].filter(Boolean).join(' ');
+    if (floorRoom) add('階数・区画', floorRoom);
+  }
 
   // 賃貸面積
   const areaStr = formatRentalArea(data);
@@ -992,7 +1112,9 @@ export function buildDynamicPropertyDetailItems(
   }
 
   // 賃料
-  if (data.rent?.amount || data.rent?.tsuboPrice) {
+  if (data.units && data.units.length > 1) {
+    add('月額賃料※', formatRent(data));
+  } else if (data.rent?.amount || data.rent?.tsuboPrice) {
     add('賃料※', formatRent(data));
   }
 
@@ -1390,17 +1512,45 @@ export function JsBPhotoSlide({
 export function JsBPlanSlide({
   planLabel,
   planUrl,
+  unitInfo,
 }: {
   planLabel: string;
   planUrl?: string;
+  unitInfo?: {
+    floor?: string;
+    unitName?: string;
+    areaTsubo?: number | null;
+    areaSqm?: number | null;
+    rent?: number | string | null;
+    commonFee?: number | string | null;
+  };
 }) {
   return (
     <div className="w-[1000px] h-[707px] bg-white p-12 flex flex-col justify-between select-none relative overflow-hidden font-sans">
       {/* 上部ヘッダー */}
       <div className="flex items-center justify-between shrink-0 mb-2">
-        <h2 className="text-[#20B26C] text-xl font-black tracking-wide font-sans">
-          PLAN：{planLabel}
-        </h2>
+        <div className="flex items-center gap-4">
+          <h2 className="text-[#20B26C] text-xl font-black tracking-wide font-sans">
+            PLAN：{planLabel}
+          </h2>
+          {unitInfo && (unitInfo.areaTsubo || unitInfo.areaSqm || unitInfo.rent) && (
+            <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200/80 px-3.5 py-1 rounded-full text-xs font-semibold text-emerald-950 shadow-2xs">
+              {unitInfo.areaTsubo && (
+                <span className="flex items-center gap-1">
+                  <span className="text-emerald-700 font-bold">面積:</span>
+                  <span>{unitInfo.areaTsubo}坪</span>
+                  {unitInfo.areaSqm && <span className="text-slate-500 font-normal">({unitInfo.areaSqm}㎡)</span>}
+                </span>
+              )}
+              {unitInfo.rent && (
+                <span className="flex items-center gap-1 border-l border-emerald-300 pl-3">
+                  <span className="text-emerald-700 font-bold">賃料:</span>
+                  <span>{typeof unitInfo.rent === 'number' ? `${unitInfo.rent.toLocaleString()}円` : unitInfo.rent}</span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
         <JSquareLogo />
       </div>
 

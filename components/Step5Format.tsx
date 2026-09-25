@@ -1,12 +1,37 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { AppState, StaffPreset } from '@/types';
-import { Layout, Image as ImageIcon, Grid, Building2, User, Phone, Mail, UserPlus, Sparkles, Check, Layers, MapPin, Link2, ShieldCheck, Crown } from 'lucide-react';
-import { getStaffPresets, fetchStaffPresetsFromCloud } from '@/lib/storage';
+import { AppState, StaffPreset, AdminSettings, defaultAdminSettings } from '@/types';
+import {
+  Layout,
+  Image as ImageIcon,
+  Grid,
+  Building2,
+  User,
+  Phone,
+  Mail,
+  UserPlus,
+  Sparkles,
+  Check,
+  Layers,
+  MapPin,
+  Link2,
+  ShieldCheck,
+  Crown,
+  Settings,
+  Sliders,
+} from 'lucide-react';
+import {
+  getStaffPresets,
+  fetchStaffPresetsFromCloud,
+  getAdminSettings,
+  fetchAdminSettingsFromCloud,
+  isUserAdmin,
+} from '@/lib/storage';
 import { auth } from '@/lib/firebase';
 import { assignSlotByFormat } from '@/utils/pdf';
 import StaffPresetModal from './StaffPresetModal';
+import AdminDashboardModal from './AdminDashboardModal';
 
 interface Props {
   appState: AppState;
@@ -15,67 +40,43 @@ interface Props {
   onPrev: () => void;
 }
 
-const formats = [
-  {
-    id: 'JS-A',
-    name: 'JS-A | バランス型',
-    subtitle: '単一区画・標準案件向け',
-    desc: '平面図を大きく配置し、外観・内観写真3〜4枚と現地案内図をバランス良く配置。右側に条件表を集約。',
-    layoutGuide: '【構成】左上: 平面図（大） / 左下: 写真3〜4枚（外観・内観） / 右側: 物件情報・賃料',
-    icon: Layout,
-    recommendedFor: 'オフィス・店舗・レジデンスの標準的な単一区画募集'
-  },
-  {
-    id: 'JS-B',
-    name: 'JS-B | プレゼン資料型（銀座並木通り型）',
-    subtitle: '複数ページ営業提案・立地プレゼン',
-    desc: '「銀座並木通りビル」を基準見本とした複数スライド提案書。表紙・建物概要・広域図＆詳細図・テナント構成を整理。',
-    layoutGuide: '【構成】PAGE1: 表紙 / PAGE2: 建物概要（左:概要 右:外観写真） / PAGE3: 広域図・詳細図 / PAGE4: テナント構成',
-    icon: Building2,
-    recommendedFor: 'ビル一棟紹介・商業施設・オーナー提案・リーシング提案・周辺立地説明'
-  },
-  {
-    id: 'JS-C',
-    name: 'JS-C | 複数区画型',
-    subtitle: 'フロア別・複数号室一覧',
-    desc: '募集条件一覧を最優先。建物外観、全体区画図、各階平面図を中心に配置し、号室別の賃料・面積を一覧化。',
-    layoutGuide: '【構成】上部: 外観・全体区画図 / 中央: 募集区画一覧テーブル / 下部: 各階平面図',
-    icon: Grid,
-    recommendedFor: '一棟ビル・商業ビル・フロア分割募集・空室複数案件'
-  },
-  {
-    id: 'JS-D',
-    name: 'JS-D | 商業・大型案件型',
-    subtitle: '大型商業施設・複数フロア',
-    desc: '建物外観、商業区画全体図、各階区画図、配置図、周辺環境図を整理して配置。複雑な案件を視覚的に整理。',
-    layoutGuide: '【構成】左側: 外観・周辺マップ / 中央: 全体配置図・各階区画図 / 右側: 条件表',
-    icon: Building2,
-    recommendedFor: '大型商業施設・複合施設・ロードサイド店舗・一括貸し'
-  },
-];
+const formatIcons: Record<string, any> = {
+  'JS-A': Layout,
+  'JS-B': Building2,
+  'JS-C': Grid,
+  'JS-D': Building2,
+};
 
 export default function Step5Format({ appState, setAppState, onNext, onPrev }: Props) {
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [adminInitialTab, setAdminInitialTab] = useState<'staff' | 'formats' | 'analyze' | 'company'>('formats');
   const [staffPresets, setStaffPresets] = useState<StaffPreset[]>([]);
+  const [adminSettings, setAdminSettings] = useState<AdminSettings>(defaultAdminSettings);
+
+  const currentUser = auth.currentUser;
+  const isAdmin = isUserAdmin(currentUser, staffPresets);
 
   useEffect(() => {
     setStaffPresets(getStaffPresets());
-    fetchStaffPresetsFromCloud().then(setStaffPresets).catch(() => {});
-  }, [isStaffModalOpen]);
+    setAdminSettings(getAdminSettings());
 
-  const currentUser = auth.currentUser;
+    fetchStaffPresetsFromCloud().then(setStaffPresets).catch(() => {});
+    fetchAdminSettingsFromCloud().then(setAdminSettings).catch(() => {});
+  }, [isStaffModalOpen, isAdminModalOpen]);
+
   const currentUserPreset = staffPresets.find(
     p => currentUser && (p.googleEmail === currentUser.email || p.googleUid === currentUser.uid)
   );
 
-  const handleSelectFormat = (fmtId: 'JS-A' | 'JS-B' | 'JS-C' | 'JS-D') => {
+  const handleSelectFormat = (fmtId: string) => {
     setAppState(prev => {
       const classifiedList = prev.data?.images?.classifiedList || [];
       const assigned = assignSlotByFormat(classifiedList, fmtId);
       
       return {
         ...prev,
-        format: fmtId,
+        format: fmtId as AppState['format'],
         data: prev.data ? {
           ...prev.data,
           images: {
@@ -115,20 +116,56 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
       
       {/* 1. Format Selection */}
       <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm space-y-6">
-        <div>
-          <h3 className="text-xl font-bold mb-1 text-slate-800 flex items-center gap-2">
-            <Layout className="w-5 h-5 text-blue-600" />
-            <span>1. JSマイソク フォーマットを選択してください</span>
-          </h3>
-          <p className="text-slate-500 text-xs">
-            選択したフォーマットに合わせて、抽出された画像（外観、平面図、案内図等）の配置優先順位が自動調整されます。
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <Layout className="w-5 h-5 text-blue-600" />
+              <span>1. JSマイソク フォーマットを選択してください</span>
+            </h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              選択したフォーマットに合わせて、抽出された画像（外観、平面図、案内図等）の配置優先順位が自動調整されます。
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setAdminInitialTab('analyze');
+                setIsAdminModalOpen(true);
+              }}
+              className="text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border bg-purple-50 hover:bg-purple-100 text-purple-800 border-purple-300 transition-colors shadow-2xs shrink-0"
+              title="見本マイソク（PDF/画像）をアップロードしてレイアウトをAI自動解析"
+            >
+              <Sparkles className="w-4 h-4 text-purple-600" />
+              <span>マイソク見本をAI解析</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setAdminInitialTab('formats');
+                setIsAdminModalOpen(true);
+              }}
+              className={`text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors shrink-0 ${
+                isAdmin
+                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 shadow-2xs'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
+              }`}
+            >
+              <ShieldCheck className={`w-4 h-4 ${isAdmin ? 'text-amber-600' : 'text-slate-500'}`} />
+              <span>管理者設定</span>
+              {isAdmin && <Crown className="w-3 h-3 text-amber-500" />}
+            </button>
+          </div>
         </div>
         
         <div className="grid md:grid-cols-2 gap-4">
-          {formats.map((fmt) => {
-            const Icon = fmt.icon;
+          {(adminSettings.formats || []).filter(f => f.enabled !== false).map((fmt) => {
+            const Icon = formatIcons[fmt.id] || Layout;
             const isSelected = appState.format === fmt.id;
+            const isCustom = fmt.isCustom || fmt.id.startsWith('JS-CUSTOM');
+
             return (
               <button
                 key={fmt.id}
@@ -141,14 +178,32 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
                 }`}
               >
                 <div className="flex items-start gap-3 w-full">
-                  <div className={`p-3 rounded-xl shrink-0 ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    <Icon className="w-6 h-6" />
+                  <div className={`p-3 rounded-xl shrink-0 ${
+                    isSelected 
+                      ? isCustom ? 'bg-purple-600 text-white' : 'bg-blue-600 text-white'
+                      : isCustom ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'
+                  }`}>
+                    {isCustom ? <Sparkles className="w-6 h-6" /> : <Icon className="w-6 h-6" />}
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-slate-900 text-base">{fmt.name}</h4>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-slate-900 text-base">{fmt.name}</h4>
+                        {isCustom && (
+                          <span className="text-[10px] bg-purple-100 text-purple-700 border border-purple-200 px-1.5 py-0.2 rounded font-bold flex items-center gap-1">
+                            <Sparkles className="w-2.5 h-2.5" /> AI解析
+                          </span>
+                        )}
+                        {fmt.badge && (
+                          <span className="text-[10px] bg-slate-100 text-slate-600 border border-slate-200 px-1.5 py-0.2 rounded font-medium">
+                            {fmt.badge}
+                          </span>
+                        )}
+                      </div>
                       {isSelected && (
-                        <span className="text-[11px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 text-white ${
+                          isCustom ? 'bg-purple-600' : 'bg-blue-600'
+                        }`}>
                           <Check className="w-3 h-3" /> 選択中
                         </span>
                       )}
@@ -160,6 +215,21 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
                   </div>
                 </div>
 
+                {/* 見本画像サムネイルプレビュー（登録されている場合） */}
+                {fmt.thumbnailUrl && (
+                  <div className="w-full h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 relative group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={fmt.thumbnailUrl}
+                      alt={fmt.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                    <span className="absolute bottom-1 right-1 text-[9px] bg-black/70 text-white px-1.5 py-0.5 rounded font-mono">
+                      解析見本
+                    </span>
+                  </div>
+                )}
+
                 <div className="w-full bg-white/80 border border-slate-200 rounded-lg p-2.5 text-[11px] text-slate-700 space-y-1">
                   <div className="font-bold text-slate-800 flex items-center gap-1">
                     <Sparkles className="w-3 h-3 text-blue-600" />
@@ -168,6 +238,12 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
                   <div className="text-slate-600 text-[11px] leading-tight">
                     {fmt.layoutGuide}
                   </div>
+                  {fmt.recommendedFor && (
+                    <div className="text-[10px] text-slate-500 pt-0.5">
+                      <span className="font-bold text-slate-600">推奨: </span>
+                      {fmt.recommendedFor}
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -362,6 +438,17 @@ export default function Step5Format({ appState, setAppState, onNext, onPrev }: P
         isOpen={isStaffModalOpen}
         onClose={() => setIsStaffModalOpen(false)}
         onSelectStaff={handleSelectPreset}
+      />
+
+      {/* Admin Dashboard Modal */}
+      <AdminDashboardModal
+        isOpen={isAdminModalOpen}
+        onClose={() => setIsAdminModalOpen(false)}
+        initialTab={adminInitialTab}
+        onSettingsUpdated={(newSettings, updatedPresets) => {
+          setAdminSettings(newSettings);
+          setStaffPresets(updatedPresets);
+        }}
       />
     </div>
   );

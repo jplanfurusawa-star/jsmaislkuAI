@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AppState, PropertyData, FieldReviewState } from '@/types';
+import { AppState, PropertyData, FieldReviewState, PropertyUnit, FloorPlanAsset, LeasePattern } from '@/types';
 import { 
   AlertCircle, 
   MapPin, 
@@ -11,7 +11,15 @@ import {
   Check, 
   X, 
   HelpCircle,
-  Info
+  Info,
+  Layers,
+  Plus,
+  Trash2,
+  CheckCircle,
+  AlertTriangle,
+  ArrowRight,
+  Eye,
+  ImageIcon
 } from 'lucide-react';
 import SourceDocumentViewer from './SourceDocumentViewer';
 import { getGoogleMapsUrl } from '@/utils/realEstate';
@@ -247,6 +255,150 @@ export default function Step4Edit({ appState, setAppState, onNext, onPrev, uploa
     setShowBatchModal(false);
   };
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 【複数フロア・複数区画・平面図 操作ハンドラー】
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const handleUpdateUnit = (index: number, patch: Partial<PropertyUnit>) => {
+    setAppState(prev => {
+      if (!prev.data) return prev;
+      const currentUnits = [...(prev.data.units || [])];
+      if (!currentUnits[index]) return prev;
+
+      const updatedUnit = { ...currentUnits[index], ...patch };
+      
+      // 賃料または坪数が変更された場合、坪単価を自動検算補完
+      if (patch.rent !== undefined || patch.areaTsubo !== undefined) {
+        const r = typeof updatedUnit.rent === 'number' ? updatedUnit.rent : parseFloat(String(updatedUnit.rent || '').replace(/[^0-9.]/g, ''));
+        const a = typeof updatedUnit.areaTsubo === 'number' ? updatedUnit.areaTsubo : parseFloat(String(updatedUnit.areaTsubo || '').replace(/[^0-9.]/g, ''));
+        if (!isNaN(r) && !isNaN(a) && a > 0) {
+          updatedUnit.rentTsuboPrice = Math.round(r / a);
+        }
+      }
+
+      currentUnits[index] = updatedUnit;
+
+      // 複数区画がある場合、全体の合計坪数・平米数とフロア一覧を同期更新
+      let newArea = { ...prev.data.area };
+      let newProp = { ...prev.data.property };
+      if (currentUnits.length > 1) {
+        let totalSqm = 0;
+        let totalTsubo = 0;
+        const bParts: string[] = [];
+        const fList: string[] = [];
+        currentUnits.forEach(u => {
+          if (typeof u.areaSqm === 'number' && !isNaN(u.areaSqm)) totalSqm += u.areaSqm;
+          if (typeof u.areaTsubo === 'number' && !isNaN(u.areaTsubo)) totalTsubo += u.areaTsubo;
+          const uLabel = u.floor ? (u.unitName ? `${u.floor} ${u.unitName}` : u.floor) : u.unitId;
+          if (u.areaTsubo) {
+            bParts.push(`${uLabel}：${u.areaSqm ? `${u.areaSqm.toFixed(2)}㎡（` : ''}${u.areaTsubo.toFixed(2)}坪${u.areaSqm ? '）' : ''}`);
+          }
+          if (u.floor && !fList.includes(u.floor)) fList.push(u.floor);
+        });
+        if (totalTsubo > 0) {
+          newArea.tsubo = Math.round(totalTsubo * 100) / 100;
+          if (totalSqm > 0) newArea.sqm = Math.round(totalSqm * 100) / 100;
+          newArea.breakdownText = bParts.join(' / ');
+        }
+        if (fList.length > 0) {
+          newProp.floor = fList.join('・');
+        }
+      }
+
+      return {
+        ...prev,
+        data: {
+          ...prev.data,
+          units: currentUnits,
+          area: newArea,
+          property: newProp,
+        }
+      };
+    });
+  };
+
+  const handleLinkPlanToUnit = (unitIndex: number, newPlanAssetId: string | null) => {
+    setAppState(prev => {
+      if (!prev.data) return prev;
+      const currentUnits = [...(prev.data.units || [])];
+      const currentPlans = [...(prev.data.plans || [])];
+      if (!currentUnits[unitIndex]) return prev;
+
+      const unit = currentUnits[unitIndex];
+      unit.planAssetId = newPlanAssetId || null;
+      unit.linkStatus = newPlanAssetId ? 'linked' : 'no_plan';
+
+      // plans 配列内の matchedUnitId を同期更新
+      currentPlans.forEach(p => {
+        if (p.assetId === newPlanAssetId) {
+          p.matchedUnitId = unit.unitId;
+          p.confidence = 'manual';
+        } else if (p.matchedUnitId === unit.unitId) {
+          p.matchedUnitId = null;
+        }
+      });
+
+      return {
+        ...prev,
+        data: {
+          ...prev.data,
+          units: currentUnits,
+          plans: currentPlans,
+        }
+      };
+    });
+  };
+
+  const handleAddUnit = () => {
+    setAppState(prev => {
+      if (!prev.data) return prev;
+      const currentUnits = [...(prev.data.units || [])];
+      const nextNum = currentUnits.length + 1;
+      const newFloor = `${nextNum}F`;
+      const newUnit: PropertyUnit = {
+        unitId: newFloor,
+        floor: newFloor,
+        unitName: '',
+        areaSqm: null,
+        areaTsubo: null,
+        rent: null,
+        rentTsuboPrice: null,
+        commonFee: null,
+        commonFeeTsuboPrice: null,
+        deposit: '',
+        keyMoney: '',
+        contractType: '',
+        handoverCondition: '',
+        handoverDate: '',
+        planAssetId: null,
+        status: 'available',
+        linkStatus: 'needs_review',
+      };
+      return {
+        ...prev,
+        data: {
+          ...prev.data,
+          units: [...currentUnits, newUnit],
+        }
+      };
+    });
+  };
+
+  const handleDeleteUnit = (index: number) => {
+    setAppState(prev => {
+      if (!prev.data) return prev;
+      const currentUnits = [...(prev.data.units || [])];
+      if (currentUnits.length <= 1) return prev; // 最小1区画は保持
+      currentUnits.splice(index, 1);
+      return {
+        ...prev,
+        data: {
+          ...prev.data,
+          units: currentUnits,
+        }
+      };
+    });
+  };
+
   // Calculations
   const tsuboCalc = data.area.sqm ? Number((data.area.sqm / 3.305785).toFixed(2)) : null;
   const sqmCalc = data.area.tsubo ? Number((data.area.tsubo * 3.305785).toFixed(2)) : null;
@@ -438,6 +590,287 @@ export default function Step4Edit({ appState, setAppState, onNext, onPrev, uploa
         
         <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
           
+          {/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
+          {/* 【複数フロア・複数区画 ＆ 平面図 紐付け管理（最重要）】 */}
+          {/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
+          <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-4 shadow-2xs">
+            <div className="flex items-center justify-between border-b border-emerald-200/80 pb-3 mb-3.5">
+              <div>
+                <h3 className="text-sm font-bold text-emerald-950 flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-emerald-600" />
+                  <span>募集フロア・区画 ＆ 平面図 紐付け管理</span>
+                  <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                    {data.units && data.units.length > 1 ? `複数区画対応 (${data.units.length}区画)` : '1区画'}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-emerald-800/80 mt-0.5">
+                  1物件に複数の募集フロア・区画・平面図が存在する場合、各区画と図面を確実に1対1で紐付けます。プルダウンで図面を変更可能です。
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddUnit}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-2xs transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                区画を追加
+              </button>
+            </div>
+
+            {/* 区画一覧カード */}
+            <div className="space-y-3">
+              {(data.units && data.units.length > 0 ? data.units : []).map((unit, uIdx) => {
+                const linkedPlan = data.plans?.find(p => p.assetId === unit.planAssetId);
+                const isLinked = !!(unit.planAssetId && linkedPlan?.imagePath);
+
+                return (
+                  <div 
+                    key={unit.unitId || uIdx}
+                    className="bg-white border border-emerald-100 rounded-xl p-3.5 shadow-2xs space-y-3 transition-all hover:border-emerald-300"
+                  >
+                    {/* 区画ヘッダー */}
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-14 text-center py-1 bg-emerald-600 text-white font-black rounded-md text-xs shadow-2xs">
+                          {unit.floor || `${uIdx + 1}F`}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={unit.unitName || ''}
+                            onChange={(e) => handleUpdateUnit(uIdx, { unitName: e.target.value })}
+                            placeholder="区画名・号室（例: A区画 / 101）"
+                            className="text-xs font-bold text-slate-800 border border-slate-200 rounded px-2 py-1 bg-slate-50 focus:bg-white focus:border-emerald-500 focus:outline-none w-48"
+                          />
+                          <span className="text-[11px] text-slate-400">ID: {unit.unitId}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {/* 紐付けステータスバッジ */}
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                          isLinked 
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300' 
+                            : unit.planAssetId 
+                              ? 'bg-amber-50 text-amber-800 border-amber-300'
+                              : 'bg-slate-50 text-slate-600 border-slate-300'
+                        }`}>
+                          {isLinked ? (
+                            <>
+                              <CheckCircle className="w-3 h-3 text-emerald-600" />
+                              {linkedPlan?.confidence === 'manual' ? '手動紐付け完了' : '自動紐付け完了'}
+                            </>
+                          ) : unit.planAssetId ? (
+                            <>
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              画像要確認
+                            </>
+                          ) : (
+                            '平面図未設定'
+                          )}
+                        </span>
+
+                        {/* 削除ボタン */}
+                        {(data.units || []).length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUnit(uIdx)}
+                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            title="この区画を削除"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 区画条件入力グリッド */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-0.5">階数</label>
+                        <input
+                          type="text"
+                          value={unit.floor || ''}
+                          onChange={(e) => handleUpdateUnit(uIdx, { floor: e.target.value })}
+                          className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded px-2 py-1 bg-white focus:border-emerald-500 focus:outline-none"
+                          placeholder="例: 1F"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-0.5">面積 (坪)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={unit.areaTsubo ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            const sqmVal = val ? Math.round(val * 3.305785 * 100) / 100 : null;
+                            handleUpdateUnit(uIdx, { areaTsubo: val, areaSqm: sqmVal });
+                          }}
+                          className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded px-2 py-1 bg-white focus:border-emerald-500 focus:outline-none"
+                          placeholder="坪数"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-0.5">面積 (㎡)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={unit.areaSqm ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            const tsuboVal = val ? Math.round((val / 3.305785) * 100) / 100 : null;
+                            handleUpdateUnit(uIdx, { areaSqm: val, areaTsubo: tsuboVal });
+                          }}
+                          className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded px-2 py-1 bg-white focus:border-emerald-500 focus:outline-none"
+                          placeholder="㎡数"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-0.5">月額賃料 (円)</label>
+                        <input
+                          type="number"
+                          value={unit.rent ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            handleUpdateUnit(uIdx, { rent: val });
+                          }}
+                          className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded px-2 py-1 bg-white focus:border-emerald-500 focus:outline-none"
+                          placeholder="賃料"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-0.5">共益費 (円)</label>
+                        <input
+                          type="number"
+                          value={unit.commonFee ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            handleUpdateUnit(uIdx, { commonFee: val });
+                          }}
+                          className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded px-2 py-1 bg-white focus:border-emerald-500 focus:outline-none"
+                          placeholder="共益費"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-0.5">賃料坪単価 (自動)</label>
+                        <div className="text-xs font-bold text-slate-700 py-1 px-2 bg-slate-50 border border-slate-200 rounded truncate">
+                          {unit.rentTsuboPrice ? `${unit.rentTsuboPrice.toLocaleString()} 円/坪` : '―'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 平面図紐付けセレクター＆サムネイル */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div className="flex-1 w-full space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[11px] font-bold text-slate-700">紐付け平面図:</label>
+                          <span className="text-[10px] text-slate-500">（この区画と対応する図面を選択）</span>
+                        </div>
+                        <select
+                          value={unit.planAssetId || ''}
+                          onChange={(e) => handleLinkPlanToUnit(uIdx, e.target.value || null)}
+                          className="w-full text-xs font-bold text-slate-800 bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:border-emerald-600 focus:outline-none shadow-2xs"
+                        >
+                          <option value="">［平面図未設定 / なし］</option>
+                          {(data.plans || []).map((plan) => (
+                            <option key={plan.assetId} value={plan.assetId}>
+                              {plan.caption || `${plan.floor} 平面図`} (ID: {plan.assetId})
+                              {plan.areaTsubo ? ` [${plan.areaTsubo}坪]` : ''}
+                              {plan.floor ? ` [${plan.floor}]` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* サムネイルプレビュー */}
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        {linkedPlan?.imagePath ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-20 h-14 bg-white border border-slate-200 rounded overflow-hidden flex items-center justify-center p-0.5 shadow-2xs">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img 
+                                src={linkedPlan.imagePath} 
+                                alt={linkedPlan.caption || '平面図'} 
+                                className="max-w-full max-h-full object-contain" 
+                              />
+                            </div>
+                            <div className="text-left text-[10px]">
+                              <span className="font-bold text-slate-700 block truncate max-w-[120px]">
+                                {linkedPlan.caption || linkedPlan.assetId}
+                              </span>
+                              <span className="text-emerald-700 font-semibold block">
+                                {linkedPlan.confidence === 'high' ? '高精度一致' : linkedPlan.confidence === 'manual' ? '手動設定' : '自動照合'}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="w-20 h-14 bg-slate-100 border border-dashed border-slate-300 rounded flex flex-col items-center justify-center text-[10px] text-slate-400 font-bold p-1 text-center">
+                            <ImageIcon className="w-3.5 h-3.5 mb-0.5 text-slate-300" />
+                            図面なし
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 検出済み平面図アセット一覧クイックギャラリー */}
+            {data.plans && data.plans.length > 0 && (
+              <div className="mt-3.5 pt-3 border-t border-emerald-200/60">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-bold text-emerald-900 flex items-center gap-1">
+                    <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
+                    検出された平面図アセット一覧 ({data.plans.length}点)
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    ※ 1区画に紐付けられた平面図は、テンプレート出力時に独立スライドまたは専用図面枠へ配置されます
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {data.plans.map((p, pIdx) => {
+                    const assignedUnit = data.units?.find(u => u.planAssetId === p.assetId);
+                    return (
+                      <div key={p.assetId || pIdx} className="bg-white border border-slate-200 rounded-lg p-2 text-xs space-y-1 shadow-2xs">
+                        <div className="w-full h-16 bg-slate-100 rounded overflow-hidden flex items-center justify-center">
+                          {p.imagePath ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={p.imagePath} alt={p.caption || '図面'} className="max-w-full max-h-full object-contain" />
+                          ) : (
+                            <span className="text-[10px] text-slate-400">画像未読込</span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="font-bold text-slate-800 truncate">{p.caption || `${p.floor} 図面`}</span>
+                          <span className="text-slate-400">{p.floor}</span>
+                        </div>
+                        <div className="text-[10px]">
+                          {assignedUnit ? (
+                            <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold block truncate">
+                              → {assignedUnit.floor} {assignedUnit.unitName || assignedUnit.unitId}
+                            </span>
+                          ) : (
+                            <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold block truncate">
+                              未割当
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* 基本情報 */}
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 h-fit">

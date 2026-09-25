@@ -13,9 +13,17 @@ import Step7Preview from "@/components/Step7Preview";
 import Step8Output from "@/components/Step8Output";
 import HistoryModal from "@/components/HistoryModal";
 import StaffPresetModal from "@/components/StaffPresetModal";
+import AdminDashboardModal from "@/components/AdminDashboardModal";
 import { auth, loginWithGoogle, logout } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { getStaffPresets, fetchStaffPresetsFromCloud } from "@/lib/storage";
+import {
+  getStaffPresets,
+  fetchStaffPresetsFromCloud,
+  getAdminSettings,
+  fetchAdminSettingsFromCloud,
+  isUserAdmin,
+} from "@/lib/storage";
+import { AdminSettings, defaultAdminSettings } from "@/types";
 
 const steps = [
   { id: 1, title: "資料アップロード", icon: FileUp },
@@ -38,8 +46,10 @@ export default function Home() {
   // Modals
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
 
   const [staffPresets, setStaffPresets] = useState<StaffPreset[]>([]);
+  const [adminSettings, setAdminSettings] = useState<AdminSettings>(defaultAdminSettings);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -47,26 +57,48 @@ export default function Home() {
       setAuthLoading(false);
       if (user) {
         setStaffPresets(getStaffPresets());
-        fetchStaffPresetsFromCloud().then((presets) => {
+        setAdminSettings(getAdminSettings());
+
+        // Fetch cloud data
+        Promise.all([
+          fetchStaffPresetsFromCloud(),
+          fetchAdminSettingsFromCloud(),
+        ]).then(([presets, settings]) => {
           setStaffPresets(presets);
+          setAdminSettings(settings);
+
           const linked = presets.find(p => p.googleEmail === user.email || p.googleUid === user.uid);
-          if (linked) {
-            setAppState(prev => {
-              if (!prev.jsContact.personName) {
-                return {
-                  ...prev,
-                  jsContact: {
-                    ...prev.jsContact,
-                    personName: linked.name,
-                    personTel: linked.tel,
-                    personEmail: linked.email,
-                    showContact: true,
-                  }
-                };
-              }
-              return prev;
-            });
-          }
+          setAppState(prev => {
+            let nextState = { ...prev };
+            // Apply default format from admin settings if at step 1
+            if (settings.defaultFormat && prev.format === 'JS-B') {
+              nextState.format = settings.defaultFormat;
+            }
+            // Apply company contact defaults
+            if (settings.companyContact) {
+              nextState.jsContact = {
+                ...nextState.jsContact,
+                company: settings.companyContact.company || nextState.jsContact.company,
+                address: settings.companyContact.address || nextState.jsContact.address,
+                tel: settings.companyContact.tel || nextState.jsContact.tel,
+                fax: settings.companyContact.fax || nextState.jsContact.fax,
+                infoEmail: settings.companyContact.infoEmail || nextState.jsContact.infoEmail,
+                url: settings.companyContact.url || nextState.jsContact.url,
+                licenseNumber: settings.companyContact.licenseNumber || nextState.jsContact.licenseNumber,
+                transactionType: settings.companyContact.transactionType || nextState.jsContact.transactionType,
+              };
+            }
+            if (linked && !prev.jsContact.personName) {
+              nextState.jsContact = {
+                ...nextState.jsContact,
+                personName: linked.name,
+                personTel: linked.tel,
+                personEmail: linked.email,
+                showContact: true,
+              };
+            }
+            return nextState;
+          });
         }).catch(() => {});
       }
     });
@@ -74,10 +106,31 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (user && isStaffModalOpen === false) {
+    if (user && isStaffModalOpen === false && isAdminModalOpen === false) {
       setStaffPresets(getStaffPresets());
+      setAdminSettings(getAdminSettings());
     }
-  }, [isStaffModalOpen, user]);
+  }, [isStaffModalOpen, isAdminModalOpen, user]);
+
+  const handleSettingsUpdated = (newSettings: AdminSettings, updatedPresets: StaffPreset[]) => {
+    setAdminSettings(newSettings);
+    setStaffPresets(updatedPresets);
+    setAppState(prev => ({
+      ...prev,
+      format: prev.format === adminSettings.defaultFormat ? newSettings.defaultFormat : prev.format,
+      jsContact: {
+        ...prev.jsContact,
+        company: newSettings.companyContact.company,
+        address: newSettings.companyContact.address,
+        tel: newSettings.companyContact.tel,
+        fax: newSettings.companyContact.fax,
+        infoEmail: newSettings.companyContact.infoEmail,
+        url: newSettings.companyContact.url,
+        licenseNumber: newSettings.companyContact.licenseNumber,
+        transactionType: newSettings.companyContact.transactionType,
+      }
+    }));
+  };
 
   const handleNext = () => setCurrentStep((s) => Math.min(s + 1, 8));
   const handlePrev = () => setCurrentStep((s) => Math.max(s - 1, 1));
@@ -145,6 +198,24 @@ export default function Home() {
             return (
               <>
                 <nav className="flex space-x-2 text-xs font-medium">
+                  <button
+                    onClick={() => setIsAdminModalOpen(true)}
+                    className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors border ${
+                      isUserAdmin(user, staffPresets)
+                        ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-500/50 shadow-xs'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700/60'
+                    }`}
+                    title="管理者画面（担当者の追加・削除、フォーマットの変更、会社情報設定）"
+                  >
+                    <ShieldCheck className={`w-3.5 h-3.5 ${isUserAdmin(user, staffPresets) ? 'text-amber-400' : 'text-slate-400'}`} />
+                    <span>管理者画面</span>
+                    {isUserAdmin(user, staffPresets) && (
+                      <span className="text-[9px] bg-amber-400/30 text-amber-300 px-1 py-0.2 rounded font-bold flex items-center gap-0.5">
+                        <Crown className="w-2.5 h-2.5" />
+                        管理者
+                      </span>
+                    )}
+                  </button>
                   <button
                     onClick={() => setIsStaffModalOpen(true)}
                     className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors border border-slate-700/60"
@@ -286,6 +357,13 @@ export default function Home() {
       <StaffPresetModal
         isOpen={isStaffModalOpen}
         onClose={() => setIsStaffModalOpen(false)}
+      />
+
+      {/* Admin Dashboard Modal */}
+      <AdminDashboardModal
+        isOpen={isAdminModalOpen}
+        onClose={() => setIsAdminModalOpen(false)}
+        onSettingsUpdated={handleSettingsUpdated}
       />
     </div>
   );

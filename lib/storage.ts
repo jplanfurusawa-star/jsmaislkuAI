@@ -8,6 +8,10 @@ import {
   PropertyData,
   ExtractedImage,
   ImageCategory,
+  AdminSettings,
+  defaultAdminSettings,
+  FormatDefinition,
+  CompanyMasterContact,
 } from '@/types';
 import { db, auth, storage } from './firebase';
 import { collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc, deleteField, query, where } from 'firebase/firestore';
@@ -16,6 +20,36 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 const STAFF_PRESETS_KEY = 'js_mysoku_staff_presets';
 const SAVED_MYSOKUS_KEY = 'js_mysoku_saved_list';
 const LAST_ACTIVE_ID_KEY = 'js_mysoku_last_active_id';
+const ADMIN_SETTINGS_KEY = 'js_mysoku_admin_settings';
+
+/**
+ * Checks if the current authenticated user has administrator privileges.
+ */
+export function isUserAdmin(
+  user: { email?: string | null; uid?: string | null } | null,
+  presets?: StaffPreset[]
+): boolean {
+  if (!user) return false;
+  const email = (user.email || '').toLowerCase().trim();
+
+  // Primary owner or furusawa domain account
+  if (email === 'jplan.furusawa@gmail.com' || email.includes('furusawa')) {
+    return true;
+  }
+
+  const staffList = presets || getStaffPresets();
+  const matched = staffList.find(
+    (p) =>
+      (p.googleEmail && p.googleEmail.toLowerCase().trim() === email) ||
+      (p.googleUid && p.googleUid === user.uid)
+  );
+
+  if (matched && matched.isAdmin) {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Strips all `undefined` properties recursively from objects before writing to Firestore.
@@ -35,6 +69,94 @@ export function removeUndefinedFields<T>(obj: T): T {
     }
   }
   return result;
+}
+
+// -------------------------------------------------------------
+// Admin & Format Settings (LocalStorage + Firestore Cloud Sync)
+// -------------------------------------------------------------
+
+export function getAdminSettings(): AdminSettings {
+  if (typeof window === 'undefined') return defaultAdminSettings;
+  try {
+    const saved = localStorage.getItem(ADMIN_SETTINGS_KEY);
+    if (saved) {
+      const parsed: AdminSettings = JSON.parse(saved);
+      return {
+        ...defaultAdminSettings,
+        ...parsed,
+        formats: Array.isArray(parsed.formats) && parsed.formats.length > 0 ? parsed.formats : defaultAdminSettings.formats,
+        companyContact: {
+          ...defaultAdminSettings.companyContact,
+          ...(parsed.companyContact || {}),
+        }
+      };
+    }
+  } catch (e) {
+    console.error("Error reading admin settings from localStorage", e);
+  }
+  return defaultAdminSettings;
+}
+
+export function saveAdminSettings(settings: AdminSettings): AdminSettings {
+  if (typeof window === 'undefined') return settings;
+  try {
+    localStorage.setItem(ADMIN_SETTINGS_KEY, JSON.stringify(settings));
+  } catch (e) {
+    console.error("Error saving admin settings to localStorage", e);
+  }
+  return settings;
+}
+
+export async function fetchAdminSettingsFromCloud(): Promise<AdminSettings> {
+  const localSettings = getAdminSettings();
+  if (!auth.currentUser) return localSettings;
+
+  try {
+    const docRef = doc(db, 'app_settings', 'format_and_company');
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      const merged: AdminSettings = {
+        id: 'format_and_company',
+        defaultFormat: data.defaultFormat || localSettings.defaultFormat || 'JS-B',
+        brandColorTheme: data.brandColorTheme || localSettings.brandColorTheme || '#0F172A',
+        formats: Array.isArray(data.formats) && data.formats.length > 0 ? data.formats : localSettings.formats,
+        companyContact: data.companyContact ? { ...localSettings.companyContact, ...data.companyContact } : localSettings.companyContact,
+        updatedAt: data.updatedAt,
+        updatedBy: data.updatedBy,
+      };
+      saveAdminSettings(merged);
+      return merged;
+    } else {
+      // Seed initial admin settings to Firestore if none exist
+      await setDoc(docRef, removeUndefinedFields({
+        ...localSettings,
+        updatedAt: new Date().toISOString(),
+        updatedBy: auth.currentUser.email || 'system'
+      }));
+      return localSettings;
+    }
+  } catch (err) {
+    console.warn("Firestore app_settings fetch failed, using local settings:", err);
+    return localSettings;
+  }
+}
+
+export async function saveAdminSettingsToCloud(settings: AdminSettings): Promise<AdminSettings> {
+  saveAdminSettings(settings);
+  if (auth.currentUser) {
+    try {
+      const docRef = doc(db, 'app_settings', 'format_and_company');
+      await setDoc(docRef, removeUndefinedFields({
+        ...settings,
+        updatedAt: new Date().toISOString(),
+        updatedBy: auth.currentUser.email || auth.currentUser.displayName || 'admin'
+      }));
+    } catch (err) {
+      console.warn("Failed to persist admin settings to Firestore:", err);
+    }
+  }
+  return settings;
 }
 
 // -------------------------------------------------------------
