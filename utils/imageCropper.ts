@@ -1,7 +1,7 @@
-import { ExtractedImage, ImageCategory } from '@/types';
+import type { ExtractedImage, ImageCategory } from '@/types';
 
 export interface VisualElementDetection {
-  box2d: number[]; // [ymin, xmin, ymax, xmax] 0-1000 normalized coordinates
+  box2d: number[]; // [ymin, xmin, ymax, xmax] normalized 0-1000
   fileIndex: number;
   category: string;
   subCategory: string;
@@ -9,265 +9,588 @@ export interface VisualElementDetection {
   confidence?: 'high' | 'medium' | 'low';
 }
 
-/**
- * 周囲の余計な白枠や透明領域、不要な外枠を除去し、情報本体（写真・図面・地図）のみを保持
- */
 export function autoTrimCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement {
   try {
     const ctx = canvas.getContext('2d');
     if (!ctx) return canvas;
 
-    const width = canvas.width;
-    const height = canvas.height;
-    const imgData = ctx.getImageData(0, 0, width, height).data;
+    const { width, height } = canvas;
+    const data = ctx.getImageData(0, 0, width, height).data;
 
     let minX = width;
     let minY = height;
-    let maxX = 0;
-    let maxY = 0;
+    let maxX = -1;
+    let maxY = -1;
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const i = (y * width + x) * 4;
-        const r = imgData[i];
-        const g = imgData[i + 1];
-        const b = imgData[i + 2];
-        const a = imgData[i + 3];
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const a = data[i + 3];
 
-        // 完全に透明でなく、かつ純白(>250,250,250)以外のピクセル
-        const isContent = a > 20 && !(r > 248 && g > 248 && b > 248);
+        const isContent =
+          a > 20 &&
+          !(r > 248 && g > 248 && b > 248);
 
-        if (isContent) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
+        if (!isContent) continue;
+
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
       }
     }
 
-    // 適切なマージン（6px）をつけて切り出し
+    if (maxX < minX || maxY < minY) return canvas;
+
     const pad = 6;
+
     const cropX = Math.max(0, minX - pad);
     const cropY = Math.max(0, minY - pad);
-    const cropW = Math.min(width - cropX, (maxX - minX) + pad * 2);
-    const cropH = Math.min(height - cropY, (maxY - minY) + pad * 2);
 
-    if (cropW > 60 && cropH > 60 && (cropW < width * 0.98 || cropH < height * 0.98)) {
-      const trimmedCanvas = document.createElement('canvas');
-      trimmedCanvas.width = cropW;
-      trimmedCanvas.height = cropH;
-      const tCtx = trimmedCanvas.getContext('2d');
-      if (tCtx) {
-        tCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-        return trimmedCanvas;
-      }
+    const cropW = Math.min(
+      width - cropX,
+      maxX - minX + 1 + pad * 2
+    );
+
+    const cropH = Math.min(
+      height - cropY,
+      maxY - minY + 1 + pad * 2
+    );
+
+    if (cropW < 60 || cropH < 60) return canvas;
+
+    if (
+      cropW >= width * 0.98 &&
+      cropH >= height * 0.98
+    ) {
+      return canvas;
     }
-  } catch (e) {
-    console.warn("Auto trim skipped", e);
+
+    const trimmed = document.createElement('canvas');
+
+    trimmed.width = cropW;
+    trimmed.height = cropH;
+
+    const tctx = trimmed.getContext('2d');
+
+    if (!tctx) return canvas;
+
+    tctx.drawImage(
+      canvas,
+      cropX,
+      cropY,
+      cropW,
+      cropH,
+      0,
+      0,
+      cropW,
+      cropH
+    );
+
+    return trimmed;
+
+  } catch (error) {
+    console.warn('Auto trim skipped', error);
+    return canvas;
   }
-  return canvas;
 }
 
-/**
- * 画像ファイルをHTMLImageElementとして読み込みCanvasに描画
- */
-function loadImageToCanvas(dataUrl: string): Promise<HTMLCanvasElement> {
+function loadImageToCanvas(
+  dataUrl: string
+): Promise<HTMLCanvasElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+
     img.crossOrigin = 'anonymous';
+
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth || img.width;
-      canvas.height = img.naturalHeight || img.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0);
-        resolve(canvas);
-      } else {
-        reject(new Error("Canvas context is not available"));
+      const canvas =
+        document.createElement('canvas');
+
+      canvas.width =
+        img.naturalWidth || img.width;
+
+      canvas.height =
+        img.naturalHeight || img.height;
+
+      const ctx =
+        canvas.getContext('2d');
+
+      if (!ctx) {
+        reject(
+          new Error(
+            'Canvas context is not available'
+          )
+        );
+        return;
       }
+
+      ctx.drawImage(img, 0, 0);
+
+      resolve(canvas);
     };
-    img.onerror = (e) => reject(e);
+
+    img.onerror = reject;
+
     img.src = dataUrl;
   });
 }
 
-/**
- * PDFの各ページを高解像度Canvasとしてレンダリング
- */
-async function renderPdfPagesToCanvases(dataUrl: string, maxPages = 5): Promise<HTMLCanvasElement[]> {
+async function renderPdfPagesToCanvases(
+  dataUrl: string,
+  maxPages = 20
+): Promise<HTMLCanvasElement[]> {
+
   const canvases: HTMLCanvasElement[] = [];
+
   try {
-    const pdfjsLib = await import('pdfjs-dist');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    const pdfjsLib =
+      await import('pdfjs-dist');
 
-    const loadingTask = pdfjsLib.getDocument({ url: dataUrl });
-    const pdf = await loadingTask.promise;
-    const pageCount = Math.min(pdf.numPages, maxPages);
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-    for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      // 高精細切り出し用に2.5倍スケールで描画
-      const viewport = page.getViewport({ scale: 2.5 });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        await (page.render as any)({ canvasContext: ctx, viewport, canvas }).promise;
-        canvases.push(canvas);
-      }
+    const pdf =
+      await pdfjsLib
+        .getDocument({ url: dataUrl })
+        .promise;
+
+    const pageCount =
+      Math.min(
+        pdf.numPages,
+        maxPages
+      );
+
+    for (
+      let pageNum = 1;
+      pageNum <= pageCount;
+      pageNum++
+    ) {
+      const page =
+        await pdf.getPage(pageNum);
+
+      const viewport =
+        page.getViewport({
+          scale: 2.5
+        });
+
+      const canvas =
+        document.createElement('canvas');
+
+      canvas.width =
+        Math.ceil(viewport.width);
+
+      canvas.height =
+        Math.ceil(viewport.height);
+
+      const ctx =
+        canvas.getContext('2d');
+
+      if (!ctx) continue;
+
+      await (page.render as any)({
+        canvasContext: ctx,
+        viewport,
+        canvas
+      }).promise;
+
+      canvases.push(canvas);
     }
-  } catch (e) {
-    console.error("Failed to render PDF pages", e);
+
+  } catch (error) {
+    console.error(
+      'Failed to render PDF pages',
+      error
+    );
   }
+
   return canvases;
 }
 
-/**
- * 元資料（チラシ・マイソク）全体から、AIが検出した個別の外観写真・内観写真・平面図・案内図の領域のみを正確に切り出し
- * ※ 元マイソク全体を1枚画像化するのではなく、個別のパーツ（写真、間取図、地図）のみを抽出
- */
+function normalizeCategory(
+  d: VisualElementDetection
+): ImageCategory {
+
+  const category =
+    (d.category || '').toUpperCase();
+
+  const sub =
+    (d.subCategory || '').toLowerCase();
+
+  const label =
+    (d.label || '').toLowerCase();
+
+  if (
+    category.includes('PLAN') ||
+    category.includes('図面') ||
+    category.includes('間取') ||
+    sub.includes('平面') ||
+    sub.includes('区画') ||
+    sub.includes('フロア') ||
+    label.includes('平面図') ||
+    label.includes('区画図')
+  ) {
+    return 'PLAN';
+  }
+
+  if (
+    category.includes('ACCESS') ||
+    category.includes('MAP') ||
+    category.includes('地図') ||
+    category.includes('案内') ||
+    sub.includes('案内') ||
+    sub.includes('地図') ||
+    label.includes('案内図') ||
+    label.includes('地図')
+  ) {
+    return 'ACCESS';
+  }
+
+  if (
+    category.includes('OTHER') ||
+    sub.includes('ロゴ') ||
+    sub.includes('文字') ||
+    sub.includes('条件') ||
+    label.includes('ロゴ') ||
+    label.includes('会社名') ||
+    label.includes('社章')
+  ) {
+    return 'OTHER';
+  }
+
+  return 'PHOTO';
+}
+
 export async function cropVisualElementsFromSource(
-  files: { file: File; dataUrl: string }[],
+  files: {
+    file: File;
+    dataUrl: string;
+  }[],
   detections: VisualElementDetection[]
 ): Promise<ExtractedImage[]> {
+
   const extractedImages: ExtractedImage[] = [];
 
-  // 全ページ/画像のCanvasをフラットに格納（GeminiのfileIndexと1:1対応）
-  const pageList: { canvas: HTMLCanvasElement; sourceFileIndex: number; pageNum: number }[] = [];
+  const pages: {
+    canvas: HTMLCanvasElement;
+    pageNum: number;
+  }[] = [];
 
-  for (let fIdx = 0; fIdx < files.length; fIdx++) {
-    const fileObj = files[fIdx];
-    if (fileObj.file.type === 'application/pdf') {
-      const pdfCanvases = await renderPdfPagesToCanvases(fileObj.dataUrl);
-      pdfCanvases.forEach((c, pIdx) => {
-        pageList.push({ canvas: c, sourceFileIndex: fIdx, pageNum: pIdx + 1 });
-      });
-    } else if (fileObj.file.type.startsWith('image/')) {
+  for (const fileObj of files) {
+
+    if (
+      fileObj.file.type ===
+      'application/pdf'
+    ) {
+      const rendered =
+        await renderPdfPagesToCanvases(
+          fileObj.dataUrl,
+          20
+        );
+
+      rendered.forEach(
+        (canvas, index) => {
+          pages.push({
+            canvas,
+            pageNum: index + 1
+          });
+        }
+      );
+
+    } else if (
+      fileObj.file.type.startsWith(
+        'image/'
+      )
+    ) {
+
       try {
-        const imgCanvas = await loadImageToCanvas(fileObj.dataUrl);
-        pageList.push({ canvas: imgCanvas, sourceFileIndex: fIdx, pageNum: 1 });
-      } catch (e) {
-        console.error(`Failed to load image file ${fIdx}`, e);
+        pages.push({
+          canvas:
+            await loadImageToCanvas(
+              fileObj.dataUrl
+            ),
+          pageNum: 1
+        });
+
+      } catch (error) {
+        console.error(
+          'Failed to load image source',
+          error
+        );
       }
     }
   }
 
-  if (pageList.length === 0) return [];
+  if (pages.length === 0) {
+    return extractedImages;
+  }
 
-  // 検出された個別の視覚要素（写真、平面図、案内図等）を切り出し
-  for (let i = 0; i < detections.length; i++) {
+  for (
+    let i = 0;
+    i < detections.length;
+    i++
+  ) {
     const d = detections[i];
-    const targetIndex = typeof d.fileIndex === 'number' ? d.fileIndex : 0;
-    const targetPageObj = pageList[targetIndex] || pageList[0];
 
-    const sourceCanvas = targetPageObj.canvas;
-    if (!sourceCanvas || !d.box2d || d.box2d.length < 4) continue;
+    const page =
+      pages[
+        Number.isFinite(d.fileIndex)
+          ? d.fileIndex
+          : 0
+      ] || pages[0];
 
-    let [ymin, xmin, ymax, xmax] = d.box2d;
-
-    // 0〜1000 正規化座標の正規化チェック
-    if (ymin > ymax) [ymin, ymax] = [ymax, ymin];
-    if (xmin > xmax) [xmin, xmax] = [xmax, xmin];
-
-    const boxWidthRatio = (xmax - xmin) / 1000;
-    const boxHeightRatio = (ymax - ymin) / 1000;
-
-    const catUpper = (d.category || '').toUpperCase();
-    const subCatLower = (d.subCategory || '').toLowerCase();
-    const labelLower = (d.label || '').toLowerCase();
-    const isPlan = catUpper.includes('PLAN') || subCatLower.includes('平面') || labelLower.includes('平面');
-
-    // 極端に小さいノイズ(3%未満)はスキップ
-    if (boxWidthRatio < 0.04 || boxHeightRatio < 0.04) continue;
-    // 【重要】平面図・間取図はページの大半を占めるため、95%以上でも除外しない！
-    // マイソク全紙スキャン（1枚チラシ全体）のみ、非図面の場合にスキップ
-    if (!isPlan && boxWidthRatio > 0.96 && boxHeightRatio > 0.96) {
+    if (
+      !page ||
+      !Array.isArray(d.box2d) ||
+      d.box2d.length < 4
+    ) {
       continue;
     }
 
-    const cW = sourceCanvas.width;
-    const cH = sourceCanvas.height;
-
-    const cropX = Math.max(0, Math.floor((xmin / 1000) * cW));
-    const cropY = Math.max(0, Math.floor((ymin / 1000) * cH));
-    const cropW = Math.min(cW - cropX, Math.ceil(boxWidthRatio * cW));
-    const cropH = Math.min(cH - cropY, Math.ceil(boxHeightRatio * cH));
-
-    if (cropW < 40 || cropH < 40) continue;
-
-    // 切り出し用Canvas作成
-    const croppedCanvas = document.createElement('canvas');
-    croppedCanvas.width = cropW;
-    croppedCanvas.height = cropH;
-    const cCtx = croppedCanvas.getContext('2d');
-    if (!cCtx) continue;
-
-    cCtx.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-    // 外枠や余白をクリーンにトリミング
-    const finalCanvas = autoTrimCanvas(croppedCanvas);
-    const croppedDataUrl = finalCanvas.toDataURL('image/jpeg', 0.94);
-
-    // カテゴリ正規化
-    let category: ImageCategory = 'PHOTO';
+    let [
+      ymin,
+      xmin,
+      ymax,
+      xmax
+    ] = d.box2d.map(Number);
 
     if (
-      catUpper.includes('PLAN') || 
-      catUpper.includes('図面') || 
-      catUpper.includes('間取') || 
-      subCatLower.includes('平面') || 
-      subCatLower.includes('区画') || 
-      subCatLower.includes('フロア') ||
-      labelLower.includes('平面図') ||
-      labelLower.includes('区画図')
+      ![
+        ymin,
+        xmin,
+        ymax,
+        xmax
+      ].every(Number.isFinite)
     ) {
-      category = 'PLAN';
-    } else if (
-      catUpper.includes('ACCESS') || 
-      catUpper.includes('MAP') || 
-      catUpper.includes('地図') || 
-      catUpper.includes('案内') || 
-      subCatLower.includes('案内') || 
-      subCatLower.includes('地図') ||
-      labelLower.includes('案内図') ||
-      labelLower.includes('地図')
-    ) {
-      category = 'ACCESS';
-    } else if (catUpper.includes('OTHER') || subCatLower.includes('ロゴ') || subCatLower.includes('文字') || subCatLower.includes('条件')) {
-      category = 'OTHER';
+      continue;
     }
 
-    const itemNum = String(extractedImages.length + 1).padStart(2, '0');
-    let subCat = d.subCategory || (category === 'PLAN' ? '平面図' : category === 'ACCESS' ? '案内図' : '外観');
-    
-    // パース・完成予想図のサブカテゴリ明記
-    if (subCatLower.includes('パース') || labelLower.includes('パース') || labelLower.includes('予想図') || labelLower.includes('レンダリング')) {
-      if (subCatLower.includes('内観') || labelLower.includes('内観') || labelLower.includes('店舗')) {
-        subCat = '内観パース';
-      } else {
-        subCat = '外観パース';
-      }
+    if (ymin > ymax) {
+      [ymin, ymax] = [ymax, ymin];
     }
 
-    const isExcludedFromPhoto = category !== 'PHOTO' || subCatLower.includes('ロゴ') || subCatLower.includes('条件');
-    const label = d.label || (category === 'PLAN' ? '平面図・間取図' : category === 'ACCESS' ? '現地案内図・周辺地図' : subCat);
+    if (xmin > xmax) {
+      [xmin, xmax] = [xmax, xmin];
+    }
+
+    ymin = Math.max(
+      0,
+      Math.min(1000, ymin)
+    );
+
+    xmin = Math.max(
+      0,
+      Math.min(1000, xmin)
+    );
+
+    ymax = Math.max(
+      0,
+      Math.min(1000, ymax)
+    );
+
+    xmax = Math.max(
+      0,
+      Math.min(1000, xmax)
+    );
+
+    const widthRatio =
+      (xmax - xmin) / 1000;
+
+    const heightRatio =
+      (ymax - ymin) / 1000;
+
+    const category =
+      normalizeCategory(d);
+
+    const isPlan =
+      category === 'PLAN';
+
+    if (
+      widthRatio < 0.04 ||
+      heightRatio < 0.04
+    ) {
+      continue;
+    }
+
+    if (
+      !isPlan &&
+      widthRatio > 0.96 &&
+      heightRatio > 0.96
+    ) {
+      continue;
+    }
+
+    const source =
+      page.canvas;
+
+    const cropX =
+      Math.max(
+        0,
+        Math.floor(
+          (xmin / 1000) *
+          source.width
+        )
+      );
+
+    const cropY =
+      Math.max(
+        0,
+        Math.floor(
+          (ymin / 1000) *
+          source.height
+        )
+      );
+
+    const cropW =
+      Math.min(
+        source.width - cropX,
+        Math.ceil(
+          widthRatio *
+          source.width
+        )
+      );
+
+    const cropH =
+      Math.min(
+        source.height - cropY,
+        Math.ceil(
+          heightRatio *
+          source.height
+        )
+      );
+
+    if (
+      cropW < 40 ||
+      cropH < 40
+    ) {
+      continue;
+    }
+
+    const cropped =
+      document.createElement(
+        'canvas'
+      );
+
+    cropped.width = cropW;
+    cropped.height = cropH;
+
+    const ctx =
+      cropped.getContext('2d');
+
+    if (!ctx) continue;
+
+    ctx.drawImage(
+      source,
+      cropX,
+      cropY,
+      cropW,
+      cropH,
+      0,
+      0,
+      cropW,
+      cropH
+    );
+
+    const finalCanvas =
+      autoTrimCanvas(cropped);
+
+    const rawSub =
+      d.subCategory || '';
+
+    const rawLabel =
+      d.label || '';
+
+    const combined =
+      `${rawSub} ${rawLabel}`
+        .toLowerCase();
+
+    let subCategory =
+      rawSub ||
+      (
+        category === 'PLAN'
+          ? '平面図'
+          : category === 'ACCESS'
+          ? '案内図'
+          : category === 'OTHER'
+          ? 'その他'
+          : '外観'
+      );
+
+    if (
+      /パース|予想図|レンダリング/
+        .test(combined)
+    ) {
+      subCategory =
+        /内観|室内|店舗内/
+          .test(combined)
+          ? '内観パース'
+          : '外観パース';
+    }
+
+    if (
+      /ロゴ|会社名|社章/
+        .test(combined)
+    ) {
+      subCategory =
+        '会社ロゴ';
+    }
+
+    const isExcludedFromPhoto =
+      category !== 'PHOTO' ||
+      /ロゴ|会社名|社章|条件|文字/
+        .test(combined);
+
+    const label =
+      rawLabel ||
+      (
+        category === 'PLAN'
+          ? '平面図・間取図'
+          : category === 'ACCESS'
+          ? '現地案内図・周辺地図'
+          : subCategory
+      );
 
     extractedImages.push({
-      id: `crop_${Date.now()}_${i}`,
-      dataUrl: croppedDataUrl,
+      id:
+        `crop_${Date.now()}_${i}`,
+
+      dataUrl:
+        finalCanvas.toDataURL(
+          'image/jpeg',
+          0.94
+        ),
+
       category,
-      subCategory: subCat,
+      subCategory,
       label,
-      width: finalCanvas.width,
-      height: finalCanvas.height,
-      confidence: d.confidence || 'high',
-      sourcePage: targetPageObj.pageNum,
-      reason: `AI領域解析 (P.${targetPageObj.pageNum}): ${label}`,
+
+      width:
+        finalCanvas.width,
+
+      height:
+        finalCanvas.height,
+
+      confidence:
+        d.confidence || 'high',
+
+      sourcePage:
+        page.pageNum,
+
+      reason:
+        `AI領域解析 (P.${page.pageNum}): ${label}`,
+
       isExcludedFromPhoto,
-      suggestedFilename: `${itemNum}_${subCat}.jpg`,
+
+      suggestedFilename:
+        `${String(
+          extractedImages.length + 1
+        ).padStart(
+          2,
+          '0'
+        )}_${subCategory}.jpg`,
     });
   }
 

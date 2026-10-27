@@ -1,6 +1,9 @@
 import {
-  StaffPreset,
   defaultStaffPresets,
+  defaultAdminSettings,
+} from '@/types';
+import type {
+  StaffPreset,
   SavedMySoku,
   SavedMySokuSummary,
   StoredImageRef,
@@ -9,7 +12,6 @@ import {
   ExtractedImage,
   ImageCategory,
   AdminSettings,
-  defaultAdminSettings,
   FormatDefinition,
   CompanyMasterContact,
 } from '@/types';
@@ -21,6 +23,41 @@ const STAFF_PRESETS_KEY = 'js_mysoku_staff_presets';
 const SAVED_MYSOKUS_KEY = 'js_mysoku_saved_list';
 const LAST_ACTIVE_ID_KEY = 'js_mysoku_last_active_id';
 const ADMIN_SETTINGS_KEY = 'js_mysoku_admin_settings';
+
+const FALLBACK_ADMIN_SETTINGS: AdminSettings = {
+  id: 'format_and_company',
+  defaultFormat: 'JS-B',
+  brandColorTheme: '#0F172A',
+  formats: [],
+  companyContact: {
+    company: '株式会社 j.square',
+    address: '〒160-0022 東京都新宿区新宿一丁目4-13 溝呂木第2ビル 3F',
+    tel: '03-6457-8222',
+    fax: '03-6730-8451',
+    infoEmail: 'info-js@j-jsquare.com',
+    url: 'http://www.j-jsquare.com',
+    licenseNumber: '東京都知事（2）第99830号',
+    transactionType: '媒介',
+  },
+};
+
+function getSafeDefaultAdminSettings(): AdminSettings {
+  const importedDefault = defaultAdminSettings as AdminSettings | undefined;
+
+  return {
+    ...FALLBACK_ADMIN_SETTINGS,
+    ...(importedDefault || {}),
+    formats:
+      Array.isArray(importedDefault?.formats) && importedDefault.formats.length > 0
+        ? importedDefault.formats
+        : FALLBACK_ADMIN_SETTINGS.formats,
+    companyContact: {
+      ...FALLBACK_ADMIN_SETTINGS.companyContact,
+      ...(importedDefault?.companyContact || {}),
+    },
+  };
+}
+
 
 /**
  * Checks if the current authenticated user has administrator privileges.
@@ -76,25 +113,37 @@ export function removeUndefinedFields<T>(obj: T): T {
 // -------------------------------------------------------------
 
 export function getAdminSettings(): AdminSettings {
-  if (typeof window === 'undefined') return defaultAdminSettings;
+  const safeDefault = getSafeDefaultAdminSettings();
+
+  if (typeof window === 'undefined') return safeDefault;
+
   try {
     const saved = localStorage.getItem(ADMIN_SETTINGS_KEY);
     if (saved) {
-      const parsed: AdminSettings = JSON.parse(saved);
-      return {
-        ...defaultAdminSettings,
-        ...parsed,
-        formats: Array.isArray(parsed.formats) && parsed.formats.length > 0 ? parsed.formats : defaultAdminSettings.formats,
-        companyContact: {
-          ...defaultAdminSettings.companyContact,
-          ...(parsed.companyContact || {}),
-        }
-      };
+      const parsed = JSON.parse(saved) as Partial<AdminSettings> | null;
+
+      if (parsed && typeof parsed === 'object') {
+        return {
+          ...safeDefault,
+          ...parsed,
+          defaultFormat: parsed.defaultFormat || safeDefault.defaultFormat,
+          brandColorTheme: parsed.brandColorTheme || safeDefault.brandColorTheme,
+          formats:
+            Array.isArray(parsed.formats) && parsed.formats.length > 0
+              ? parsed.formats
+              : safeDefault.formats,
+          companyContact: {
+            ...safeDefault.companyContact,
+            ...(parsed.companyContact || {}),
+          },
+        };
+      }
     }
   } catch (e) {
     console.error("Error reading admin settings from localStorage", e);
   }
-  return defaultAdminSettings;
+
+  return safeDefault;
 }
 
 export function saveAdminSettings(settings: AdminSettings): AdminSettings {
@@ -164,7 +213,7 @@ export async function saveAdminSettingsToCloud(settings: AdminSettings): Promise
 // -------------------------------------------------------------
 
 export function getStaffPresets(): StaffPreset[] {
-  if (typeof window === 'undefined') return defaultStaffPresets;
+  if (typeof window === 'undefined') return Array.isArray(defaultStaffPresets) ? defaultStaffPresets : [];
   try {
     const saved = localStorage.getItem(STAFF_PRESETS_KEY);
     if (saved) {
@@ -174,7 +223,7 @@ export function getStaffPresets(): StaffPreset[] {
   } catch (e) {
     console.error("Error reading staff presets from localStorage", e);
   }
-  return defaultStaffPresets;
+  return Array.isArray(defaultStaffPresets) ? defaultStaffPresets : [];
 }
 
 export function saveStaffPresets(presets: StaffPreset[]) {

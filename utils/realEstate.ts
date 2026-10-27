@@ -98,10 +98,10 @@ export function generateProposalEmail(data: PropertyData, jsContact: AppState['j
   }
 
   // 契約形態 (例: 定期借家3年、普通借家等)
-  const contractType = contract || 'ご相談';
+  const contractType = contract || '―';
 
   // 賃料 (元資料表記に従い税込・税別を明記)
-  let rentStr = 'ご相談';
+  let rentStr = '―';
   if (rent.amount !== null && rent.amount !== undefined && rent.amount > 0) {
     const taxStr = rent.taxIncluded === true ? '（税込）' : rent.taxIncluded === false ? '（税別）' : '';
     rentStr = `${rent.amount.toLocaleString()}円 / 月額 ${taxStr}`.trim();
@@ -111,13 +111,13 @@ export function generateProposalEmail(data: PropertyData, jsContact: AppState['j
   }
 
   // 保証金 / 礼金 / 償却
-  const depositStr = deposit || 'ご相談';
+  const depositStr = deposit || '―';
   const keyMoneyStr = keyMoney || 'なし';
   const depreciationStr = depreciation || 'なし';
 
-  // 引き渡し（状態）と引き渡し時期を分離 (仕様第11項)
-  const handoverStatus = property.handoverStatus || (handover && !handover.includes('即日') && !handover.includes('退去') ? handover : '現況有姿（相談）');
-  const handoverTiming = property.handoverTiming || (handover && (handover.includes('即日') || handover.includes('相談') || handover.includes('予定')) ? handover : '相談');
+  // 引渡状態と入居時期 (仕様第11項)
+  const handoverStatus = property.handoverStatus || (handover && !handover.includes('即日') && !handover.includes('退去') ? handover : '') || '―';
+  const handoverTiming = property.handoverTiming || (handover && (handover.includes('即日') || handover.includes('相談') || handover.includes('予定')) ? handover : '') || '―';
 
   const staffName = jsContact.personName || '［作成担当者］';
   const staffTel = jsContact.personTel || '［担当者携帯番号］';
@@ -142,9 +142,9 @@ URL: ${googleMapsUrl}
 
 償却：${depreciationStr}
 
-引き渡し：${handoverStatus}
+引渡状態：${handoverStatus}
 
-引き渡し時期：${handoverTiming}
+入居時期：${handoverTiming}
 
 ※　情報取り扱いには最大限ご注意いただきたい旨、ご留意くださいませ
 
@@ -221,7 +221,7 @@ export async function downloadProposalEmailPdf(
   ].filter(Boolean).join('');
   const floorAndArea = (floorPart && areaPart) ? `${floorPart}／${areaPart}` : (floorPart || areaPart || '―');
 
-  let rentStr = 'ご相談';
+  let rentStr = '―';
   if (data.rent.amount !== null && data.rent.amount !== undefined && data.rent.amount > 0) {
     const taxStr = data.rent.taxIncluded === true ? '（税込）' : data.rent.taxIncluded === false ? '（税別）' : '';
     rentStr = `${data.rent.amount.toLocaleString()}円 / 月額 ${taxStr}`.trim();
@@ -235,13 +235,13 @@ export async function downloadProposalEmailPdf(
     { label: '住所', value: data.property.address || '―' },
     { label: 'URL', value: mapsUrl, isUrl: true },
     { label: '階数・面積', value: floorAndArea },
-    { label: '契約形態', value: data.contract || 'ご相談' },
+    { label: '契約形態', value: data.contract || '―' },
     { label: '賃料', value: rentStr },
-    { label: '保証金', value: data.deposit || 'ご相談' },
+    { label: '保証金', value: data.deposit || '―' },
     { label: '礼金', value: data.keyMoney || 'なし' },
     { label: '償却', value: data.depreciation || 'なし' },
-    { label: '引き渡し', value: data.property.handoverStatus || data.handover || '現況有姿（相談）' },
-    { label: '引き渡し時期', value: data.property.handoverTiming || '相談' },
+    { label: '引渡状態', value: data.property.handoverStatus || data.handover || '―' },
+    { label: '入居時期', value: data.property.handoverTiming || '―' },
   ];
 
   items.forEach((item, idx) => {
@@ -837,196 +837,262 @@ export async function downloadPowerPointPresentation(
 
   } else {
     // ==========================================
-    // JS-A / JS-C / JS-D: 1スライド マイソク形式
+    // ==========================================
+    // JS-A / JS-C / JS-D: 1スライド マイソク形式 (A4横)
     // ==========================================
     const slide = pptx.addSlide();
-    slide.background = { color: 'F8FAFC' };
+    slide.background = { color: 'FFFFFF' };
 
-    // Top Header Banner
+    // Helper to test if a string or number has valid substantive content
+    const isValidVal = (val: any): boolean => {
+      if (val === undefined || val === null) return false;
+      if (typeof val === 'number') return val > 0;
+      if (typeof val === 'string') {
+        const s = val.trim();
+        if (!s) return false;
+        const invalid = ['未定', '未記載', '要確認', '―', '-', 'null', 'undefined', 'null null', '0', '0円'];
+        return !invalid.includes(s);
+      }
+      return false;
+    };
+
+    // 1. Top Header Banner (j.square Dark Navy with Emerald Green bottom accent)
     slide.addShape(pptx.ShapeType.rect, {
       x: 0.4,
       y: 0.3,
-      w: 12.5,
-      h: 1.1,
+      w: 12.53,
+      h: 0.9,
       fill: { color: '0F172A' },
+      line: { color: '20B26C', width: 2 },
     });
 
-    // Building Name with Google Maps hyperlink
+    const roomStr = data.property.room ? `${data.property.room}号室` : '';
+    const floorStr = data.property.floor || '';
+    const usageStr = data.property.usage ? `[${data.property.usage}]` : '';
+    const subtitleStr = [floorStr, roomStr, usageStr].filter(Boolean).join(' ');
+
     slide.addText(
       [
         {
-          text: data.property.name || '物件名未定',
+          text: data.property.name || '対象物件',
           options: {
-            fontSize: 22,
+            fontSize: 20,
             bold: true,
             color: 'FFFFFF',
             hyperlink: { url: mapsUrl, tooltip: 'Googleマップで位置を確認' },
           },
         },
-        {
-          text: `  ${data.property.room ? `${data.property.room}号室` : ''} ${data.property.usage ? `[${data.property.usage}]` : ''}`,
-          options: { fontSize: 14, color: '94A3B8', bold: false },
-        },
+        ...(subtitleStr ? [{ text: `   ${subtitleStr}`, options: { fontSize: 13, color: 'CBD5E1', bold: false } }] : []),
       ],
-      { x: 0.6, y: 0.35, w: 7.5, h: 0.9, valign: 'middle' }
+      { x: 0.6, y: 0.3, w: 7.5, h: 0.9, valign: 'middle' }
     );
 
-    // Access (Right top)
-    slide.addText(
-      [
-        { text: '交 通: ', options: { fontSize: 11, bold: true, color: '38BDF8' } },
-        { text: data.property.access || '―', options: { fontSize: 13, bold: true, color: 'FFFFFF' } },
-      ],
-      { x: 8.2, y: 0.35, w: 4.5, h: 0.9, align: 'right', valign: 'middle' }
-    );
+    if (isValidVal(data.property.access)) {
+      slide.addText(
+        [
+          { text: '交 通: ', options: { fontSize: 10, bold: true, color: '34D399' } },
+          { text: data.property.access, options: { fontSize: 12, bold: true, color: 'FFFFFF' } },
+        ],
+        { x: 8.2, y: 0.3, w: 4.5, h: 0.9, align: 'right', valign: 'middle' }
+      );
+    }
 
-    // Visual Elements
+    // 2. Left Column: Visual Images (x: 0.4, w: 4.2)
+    const hasMap = Boolean(targetImages.map);
     if (targetImages.main) {
       slide.addImage({
         data: targetImages.main,
         x: 0.4,
-        y: 1.55,
-        w: 3.8,
-        h: 2.3,
-        sizing: { type: 'contain', w: 3.8, h: 2.3 },
+        y: 1.35,
+        w: 4.2,
+        h: hasMap ? 3.0 : 4.55,
+        sizing: { type: 'contain', w: 4.2, h: hasMap ? 3.0 : 4.55 },
       });
     }
 
-    if (targetImages.floorPlan) {
-      slide.addImage({
-        data: targetImages.floorPlan,
-        x: 4.35,
-        y: 1.55,
-        w: 3.8,
-        h: 2.3,
-        sizing: { type: 'contain', w: 3.8, h: 2.3 },
-      });
-    }
-
-    if (targetImages.map) {
+    if (hasMap) {
       slide.addImage({
         data: targetImages.map,
         x: 0.4,
-        y: 3.95,
-        w: 3.8,
-        h: 1.25,
-        sizing: { type: 'contain', w: 3.8, h: 1.25 },
+        y: 4.45,
+        w: 4.2,
+        h: 1.45,
+        sizing: { type: 'contain', w: 4.2, h: 1.45 },
       });
     }
 
-    // Rent & Catch copy
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 8.3,
-      y: 1.55,
-      w: 4.6,
-      h: 1.15,
-      fill: { color: '1E3A8A' },
-    });
-
-    const rentAmountStr = (data.rent.amount && data.rent.amount > 0) ? data.rent.amount.toLocaleString() : 'ご相談';
-    const taxStr = data.rent.taxIncluded ? '(税込)' : data.rent.taxIncluded === false ? '(税別)' : '';
-
-    slide.addText(
-      [
-        { text: '賃料\n', options: { fontSize: 11, color: '93C5FD', bold: true } },
-        { text: `${rentAmountStr} `, options: { fontSize: 24, color: 'FFFFFF', bold: true } },
-        { text: rentAmountStr === 'ご相談' ? '' : `円/月額 ${taxStr}`, options: { fontSize: 12, color: 'FFFFFF' } },
-      ],
-      { x: 8.4, y: 1.58, w: 4.4, h: 1.05, align: 'center', valign: 'middle' }
-    );
-
-    let additionalText = appState.additionalItems.map(item => `■ ${item.name}: ${item.content}`).join('\n');
-    if (!additionalText) {
-      additionalText = `■ おすすめポイント: 好立地物件\n■ 最寄駅: ${data.property.access || '―'}\n■ Googleマップ: ${mapsUrl}`;
+    // 3. Center Column: Floor Plan (x: 4.8, w: 4.5, h: 4.55)
+    if (targetImages.floorPlan) {
+      slide.addImage({
+        data: targetImages.floorPlan,
+        x: 4.8,
+        y: 1.35,
+        w: 4.5,
+        h: 4.55,
+        sizing: { type: 'contain', w: 4.5, h: 4.55 },
+      });
     }
 
+    // 4. Right Column: Conditions & Key Information (x: 9.5, w: 3.43)
+    let rightCurrentY = 1.35;
+    const hasValidRent = typeof data.rent.amount === 'number' && data.rent.amount > 0;
+
+    // Rent card (Only shown if rent is valid - strictly no dummy/guessed rent)
+    if (hasValidRent) {
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 9.5,
+        y: rightCurrentY,
+        w: 3.43,
+        h: 0.9,
+        fill: { color: '0F172A' },
+        line: { color: '20B26C', width: 2 },
+      });
+
+      const rentFormatted = data.rent.amount!.toLocaleString();
+      const taxStr = data.rent.taxIncluded ? '(税込)' : data.rent.taxIncluded === false ? '(税別)' : '';
+      const tsuboStr = data.rent.tsuboPrice ? `  坪単価: ${data.rent.tsuboPrice.toLocaleString()}円` : '';
+
+      slide.addText(
+        [
+          { text: '賃料 (月額)\n', options: { fontSize: 9.5, color: '34D399', bold: true } },
+          { text: `${rentFormatted} `, options: { fontSize: 20, color: 'FFFFFF', bold: true } },
+          { text: `円/月 ${taxStr}${tsuboStr}`, options: { fontSize: 9.5, color: 'E2E8F0' } },
+        ],
+        { x: 9.55, y: rightCurrentY, w: 3.33, h: 0.9, align: 'center', valign: 'middle' }
+      );
+      rightCurrentY += 0.98;
+    }
+
+    // Additional items (Only rendered if user entered them - strictly no dummy bullets)
+    if (appState.additionalItems && appState.additionalItems.length > 0) {
+      const itemsText = appState.additionalItems.map(i => `■ ${i.name}: ${i.content}`).join('\n');
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 9.5,
+        y: rightCurrentY,
+        w: 3.43,
+        h: 0.8,
+        fill: { color: 'F0FDF4' },
+        line: { color: 'BBF7D0', width: 1 },
+      });
+      slide.addText(itemsText, {
+        x: 9.55,
+        y: rightCurrentY + 0.05,
+        w: 3.33,
+        h: 0.7,
+        fontSize: 9,
+        color: '166534',
+        valign: 'middle',
+      });
+      rightCurrentY += 0.88;
+    }
+
+    // Dynamic Condition Rows (All 10 major conditions in exact Item-Value format)
+    const validConditions: { label: string; val: string }[] = [];
+
+    // 1. 募集階
+    const rawFloor = [
+      data.property?.floor,
+      data.property?.room ? (data.property.room.includes('号') ? data.property.room : `${data.property.room}号室`) : ''
+    ].filter(Boolean).join(' ');
+    if (isValidVal(rawFloor)) validConditions.push({ label: '募集階', val: rawFloor });
+
+    // 2. 面積
+    let areaStr = '';
+    if (data.area?.tsubo && data.area?.sqm) areaStr = `${data.area.tsubo}坪（${data.area.sqm}㎡）`;
+    else if (data.area?.tsubo) areaStr = `${data.area.tsubo}坪`;
+    else if (data.area?.sqm) areaStr = `${data.area.sqm}㎡`;
+    if (isValidVal(areaStr)) validConditions.push({ label: '面積', val: areaStr });
+
+    // 3. 賃料 (条件表に記載がある場合は必ず主要条件欄に掲載)
+    if (typeof data.rent?.amount === 'number' && data.rent.amount > 0) {
+      const tax = data.rent.taxIncluded === true ? '（税込）' : data.rent.taxIncluded === false ? '（税別）' : '';
+      validConditions.push({ label: '賃料', val: `${data.rent.amount.toLocaleString()}円／月${tax}` });
+    }
+
+    // 4. 共益費
+    if (typeof data.commonFee?.amount === 'number') {
+      if (data.commonFee.amount > 0) {
+        const tax = data.commonFee.taxIncluded === true ? '（税込）' : data.commonFee.taxIncluded === false ? '（税別）' : '';
+        validConditions.push({ label: '共益費', val: `${data.commonFee.amount.toLocaleString()}円／月${tax}` });
+      } else if (data.commonFee.amount === 0) {
+        validConditions.push({ label: '共益費', val: 'なし' });
+      }
+    }
+
+    // 5. 保証金または敷金
+    if (isValidVal(data.deposit)) {
+      const depositLabel = data.deposit.includes('敷金') ? '敷金' : '保証金';
+      validConditions.push({ label: depositLabel, val: data.deposit });
+    }
+
+    // 6. 礼金
+    if (isValidVal(data.keyMoney)) validConditions.push({ label: '礼金', val: data.keyMoney });
+
+    // 7. 償却
+    if (isValidVal(data.depreciation)) validConditions.push({ label: '償却', val: data.depreciation });
+
+    // 8. 契約形態
+    if (isValidVal(data.contract)) validConditions.push({ label: '契約形態', val: data.contract });
+
+    // 9. 引渡状態
+    const handoverStr = data.property?.handoverStatus || data.handover;
+    if (isValidVal(handoverStr)) validConditions.push({ label: '引渡状態', val: handoverStr });
+
+    // 10. 入居可能時期
+    const timingStr = data.property?.handoverTiming;
+    if (isValidVal(timingStr)) validConditions.push({ label: '入居時期', val: timingStr });
+
+    if (validConditions.length > 0) {
+      const availableTableH = Math.max(1.5, 5.95 - rightCurrentY);
+      const rowHeight = availableTableH / validConditions.length;
+
+      const dynamicRows = validConditions.map(item => [
+        { text: item.label, options: { bold: true, fill: { color: 'F8FAFC' }, color: '334155', fontSize: 9 } },
+        { text: item.val, options: { bold: true, color: '0F172A', fontSize: 9 } },
+      ]);
+
+      slide.addTable(dynamicRows, {
+        x: 9.5,
+        y: rightCurrentY,
+        w: 3.43,
+        h: availableTableH,
+        colW: [1.1, 2.33],
+        rowH: rowHeight,
+        border: { pt: 0.5, color: 'CBD5E1' },
+        margin: 0.04,
+      });
+    }
+
+    // 5. Bottom JS Contact Footer Band (y: 6.05, h: 1.05)
     slide.addShape(pptx.ShapeType.rect, {
-      x: 8.3,
-      y: 2.8,
-      w: 4.6,
+      x: 0.4,
+      y: 6.05,
+      w: 12.53,
       h: 1.05,
-      fill: { color: 'EFF6FF' },
-      line: { color: 'BFDBFE', width: 1 },
-    });
-
-    slide.addText(additionalText, {
-      x: 8.4,
-      y: 2.85,
-      w: 4.4,
-      h: 0.95,
-      fontSize: 9.5,
-      color: '1E40AF',
-    });
-
-    // Property Details Table
-    const tableRows = [
-      [
-        { text: '所在地', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: data.property.address || '―', options: { colspan: 3, fontSize: 9 } },
-        { text: '契約面積', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: `${data.area.tsubo ? `${data.area.tsubo}坪` : ''} ${data.area.sqm ? `(${data.area.sqm}㎡)` : ''}`.trim() || '―', options: { fontSize: 9 } },
-      ],
-      [
-        { text: '共益費', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: (data.commonFee.amount && data.commonFee.amount > 0) ? `${data.commonFee.amount.toLocaleString()}円` : 'なし', options: { fontSize: 9 } },
-        { text: '敷金/保証金', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: data.keyMoney || data.deposit || 'ご相談', options: { fontSize: 9 } },
-        { text: '礼金/償却', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: data.depreciation || 'なし', options: { fontSize: 9 } },
-      ],
-      [
-        { text: '契約期間', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: data.contract || '相談', options: { fontSize: 9 } },
-        { text: '引渡時期', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: data.property.handoverTiming || data.handover || '相談', options: { fontSize: 9 } },
-        { text: '構造・規模', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: `${data.building.structure || ''} ${data.building.scale || ''}`.trim() || '―', options: { fontSize: 9 } },
-      ],
-      [
-        { text: '築年月', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: data.building.builtYearMonth || '―', options: { fontSize: 9 } },
-        { text: '設備・備考', options: { bold: true, fill: { color: 'E2E8F0' }, fontSize: 9 } },
-        { text: `${data.equipment.join(' / ')} ${data.conditions.join(' / ')}`.trim() || '―', options: { colspan: 3, fontSize: 8.5 } },
-      ],
-    ];
-
-    slide.addTable(tableRows, {
-      x: 0.4,
-      y: 3.95,
-      w: 12.5,
-      colW: [1.3, 2.8, 1.3, 2.8, 1.3, 3.0],
-      border: { pt: 0.5, color: '94A3B8' },
-      margin: 0.04,
-    });
-
-    // Footer: Company & Staff Contact
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 0.4,
-      y: 5.85,
-      w: 12.5,
-      h: 1.0,
-      fill: { color: 'FFFFFF' },
-      line: { color: 'CBD5E1', width: 1 },
+      fill: { color: 'F8FAFC' },
+      line: { color: '20B26C', width: 2 },
     });
 
     slide.addText(
       [
         { text: `${appState.jsContact.company}\n`, options: { fontSize: 12, bold: true, color: '0F172A' } },
-        { text: `${appState.jsContact.address}  |  免許番号: ${formattedLicense} (取引態様: ${appState.jsContact.transactionType})\n`, options: { fontSize: 8.5, color: '64748B' } },
+        { text: `${appState.jsContact.address}  |  免許番号: ${formattedLicense} (取引態様: ${appState.jsContact.transactionType || '媒介'})\n`, options: { fontSize: 8.5, color: '64748B' } },
         { text: `TEL：${appState.jsContact.tel}  FAX：${appState.jsContact.fax}  MAIL：${appState.jsContact.infoEmail}`, options: { fontSize: 8.5, color: '64748B' } },
       ],
-      { x: 0.6, y: 5.9, w: 7.0, h: 0.9, valign: 'middle' }
+      { x: 0.6, y: 6.1, w: 7.2, h: 0.95, valign: 'middle' }
     );
 
-    slide.addText(
-      [
-        { text: 'お問い合わせ・内見予約\n', options: { fontSize: 8.5, color: '3B82F6', bold: true } },
-        { text: `担当：${appState.jsContact.personName || '［未設定］'}  `, options: { fontSize: 11, bold: true, color: '0F172A' } },
-        { text: `MOBILE：${appState.jsContact.personTel || '［未設定］'}\n`, options: { fontSize: 11, bold: true, color: '2563EB' } },
-        { text: `URL：${appState.jsContact.url}`, options: { fontSize: 8.5, color: '64748B' } },
-      ],
-      { x: 7.8, y: 5.9, w: 4.9, h: 0.9, align: 'right', valign: 'middle' }
-    );
+    if (appState.jsContact.personName) {
+      slide.addText(
+        [
+          { text: '担当者直通連絡先\n', options: { fontSize: 8.5, color: '047857', bold: true } },
+          { text: `担当：${appState.jsContact.personName}  `, options: { fontSize: 11, bold: true, color: '0F172A' } },
+          { text: `TEL：${appState.jsContact.personTel || '―'}\n`, options: { fontSize: 11, bold: true, color: '047857' } },
+          { text: `URL：${appState.jsContact.url}`, options: { fontSize: 8.5, color: '64748B' } },
+        ],
+        { x: 8.0, y: 6.1, w: 4.7, h: 0.95, align: 'right', valign: 'middle' }
+      );
+    }
   }
 
   const filename = `${cleanFilenameName}_${appState.format}_${dateStrYYYYMMDD}.pptx`;

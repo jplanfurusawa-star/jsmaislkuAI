@@ -170,6 +170,98 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
     return trimmed;
   };
 
+  const isValidConditionVal = (val: any): boolean => {
+    if (val === undefined || val === null) return false;
+    if (typeof val === 'number') return val > 0;
+    if (typeof val === 'string') {
+      const s = val.trim();
+      if (!s) return false;
+      const invalidValues = ['未定', '未記載', '要確認', '―', '-', 'null', 'undefined', 'null null', '0', '0円'];
+      return !invalidValues.includes(s);
+    }
+    return false;
+  };
+
+  const hasValidRent = typeof data?.rent?.amount === 'number' && data.rent.amount > 0;
+
+  const jsAConditions = React.useMemo(() => {
+    if (!data) return [];
+    const list: { label: string; value: string }[] = [];
+
+    // 1. 募集階
+    const floorVal = [
+      data.property?.floor,
+      data.property?.room ? (data.property.room.includes('号') ? data.property.room : `${data.property.room}号室`) : ''
+    ].filter(Boolean).join(' ');
+    if (isValidConditionVal(floorVal)) {
+      list.push({ label: '募集階', value: floorVal });
+    }
+
+    // 2. 面積
+    let areaVal = '';
+    if (data.area?.tsubo && data.area?.sqm) {
+      areaVal = `${data.area.tsubo}坪（${data.area.sqm}㎡）`;
+    } else if (data.area?.tsubo) {
+      areaVal = `${data.area.tsubo}坪`;
+    } else if (data.area?.sqm) {
+      areaVal = `${data.area.sqm}㎡`;
+    }
+    if (isValidConditionVal(areaVal)) {
+      list.push({ label: '面積', value: areaVal });
+    }
+
+    // 3. 賃料 (条件表に記載がある場合は必ず主要条件欄に掲載)
+    if (typeof data.rent?.amount === 'number' && data.rent.amount > 0) {
+      const tax = data.rent.taxIncluded === true ? '（税込）' : data.rent.taxIncluded === false ? '（税別）' : '';
+      list.push({ label: '賃料', value: `${data.rent.amount.toLocaleString()}円／月${tax}` });
+    }
+
+    // 4. 共益費
+    if (typeof data.commonFee?.amount === 'number') {
+      if (data.commonFee.amount > 0) {
+        const tax = data.commonFee.taxIncluded === true ? '（税込）' : data.commonFee.taxIncluded === false ? '（税別）' : '';
+        list.push({ label: '共益費', value: `${data.commonFee.amount.toLocaleString()}円／月${tax}` });
+      } else if (data.commonFee.amount === 0) {
+        list.push({ label: '共益費', value: 'なし' });
+      }
+    }
+
+    // 5. 保証金または敷金
+    if (isValidConditionVal(data.deposit)) {
+      const depositLabel = data.deposit.includes('敷金') ? '敷金' : '保証金';
+      list.push({ label: depositLabel, value: data.deposit });
+    }
+
+    // 6. 礼金
+    if (isValidConditionVal(data.keyMoney)) {
+      list.push({ label: '礼金', value: data.keyMoney });
+    }
+
+    // 7. 償却
+    if (isValidConditionVal(data.depreciation)) {
+      list.push({ label: '償却', value: data.depreciation });
+    }
+
+    // 8. 契約形態
+    if (isValidConditionVal(data.contract)) {
+      list.push({ label: '契約形態', value: data.contract });
+    }
+
+    // 9. 引渡状態
+    const handoverVal = data.property?.handoverStatus || data.handover;
+    if (isValidConditionVal(handoverVal)) {
+      list.push({ label: '引渡状態', value: handoverVal });
+    }
+
+    // 10. 入居可能時期
+    const timingVal = data.property?.handoverTiming;
+    if (isValidConditionVal(timingVal)) {
+      list.push({ label: '入居時期', value: timingVal });
+    }
+
+    return list;
+  }, [data]);
+
   // 14-Point Quality Checklist (仕様第12項)
   const checklistItems = [
     { id: 1, label: '元資料写真の抽出・再利用', checked: !!mainImage || classifiedList.some(i => i.category === 'PHOTO') },
@@ -431,140 +523,118 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
               ref={singleSlideRef}
               className="w-[1000px] h-[707px] bg-white border border-slate-300 shadow-2xl flex flex-col justify-between shrink-0 p-5 text-slate-900 font-sans select-none relative overflow-hidden"
             >
-              {/* Top Banner */}
-              <div className="bg-[#0F172A] text-white p-3.5 rounded-lg flex items-center justify-between border-b-2 border-blue-500">
+              {/* Top Banner (j.square dark navy with emerald green border) */}
+              <div className="bg-[#0F172A] text-white p-3.5 rounded-lg flex items-center justify-between border-b-2 border-[#20B26C]">
                 <div className="flex items-baseline gap-3">
                   <a
                     href={mapsUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-2xl font-black tracking-tight text-white hover:text-blue-300 transition-colors flex items-center gap-2"
+                    className="text-2xl font-black tracking-tight text-white hover:text-emerald-300 transition-colors flex items-center gap-2"
                   >
-                    <span>{data.property.name || '物件名未定'}</span>
-                    <ExternalLink className="w-4 h-4 opacity-70" />
+                    <span>{data.property.name || '対象物件'}</span>
+                    <ExternalLink className="w-4 h-4 opacity-70 text-emerald-400" />
                   </a>
                   <span className="text-sm font-bold text-slate-300">
-                    {data.property.room ? `${data.property.room}号室` : ''} {data.property.usage ? `[${data.property.usage}]` : ''}
+                    {[data.property.floor, data.property.room ? `${data.property.room}号室` : '', data.property.usage ? `[${data.property.usage}]` : ''].filter(Boolean).join(' ')}
                   </span>
                 </div>
-                <div className="text-right">
-                  <span className="text-[11px] text-sky-400 font-bold block">交 通</span>
-                  <span className="text-sm font-bold text-white tracking-wide">{cleanVal(data.property.access, '―')}</span>
-                </div>
+                {isValidConditionVal(data.property.access) && (
+                  <div className="text-right">
+                    <span className="text-[11px] text-[#34D399] font-bold block">交 通</span>
+                    <span className="text-sm font-bold text-white tracking-wide">{data.property.access}</span>
+                  </div>
+                )}
               </div>
 
-              {/* Middle Main Content */}
+              {/* Middle Main Content (3 Columns) */}
               <div className="grid grid-cols-12 gap-3 flex-1 my-3 overflow-hidden">
                 
-                {/* Left Column: Visual Images (5 cols) */}
-                <div className="col-span-5 flex flex-col gap-2.5">
-                  {/* Main Photo */}
-                  <div className="flex-1 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col relative">
-                    <div className="w-full h-full flex items-center justify-center bg-white">
+                {/* Left Column: Exterior Visual Photo & Map (5 cols) */}
+                <div className="col-span-5 flex flex-col gap-2.5 h-full">
+                  {/* Main Photo (Takes full height if no map, or flex-1 if map exists) */}
+                  <div className="flex-1 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col relative shadow-xs">
+                    <div className="w-full h-full flex items-center justify-center bg-white p-1">
                       {mainImage ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={mainImage} alt="Main Photo" className="w-full h-full object-contain" />
+                        <img src={mainImage} alt="外観写真" className="w-full h-full object-contain" />
                       ) : (
-                        <span className="text-xs text-slate-400 font-bold">外観写真未設定</span>
+                        <span className="text-xs text-slate-400 font-bold">外観画像</span>
                       )}
                     </div>
                   </div>
 
-                  {/* Sub Image / Map */}
-                  <div className="h-36 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col relative">
-                    <div className="w-full h-full flex items-center justify-center bg-white">
-                      {effectiveWideMap ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={effectiveWideMap} alt="Map" className="w-full h-full object-contain" />
-                      ) : (
-                        <div className="text-center p-2">
-                          <MapPin className="w-5 h-5 text-slate-400 mx-auto mb-0.5" />
-                          <span className="text-[11px] text-slate-500 font-bold">{data.property.address || '現地案内図'}</span>
-                        </div>
-                      )}
+                  {/* Sub Image / Map (Only rendered if map exists - NO empty placeholder) */}
+                  {effectiveWideMap ? (
+                    <div className="h-40 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col relative shadow-xs shrink-0">
+                      <div className="w-full h-full flex items-center justify-center bg-white p-1">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={effectiveWideMap} alt="周辺地図" className="w-full h-full object-contain" />
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                 </div>
 
                 {/* Center Column: Floor Plan (4 cols) */}
-                <div className="col-span-4 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col relative">
+                <div className="col-span-4 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col relative shadow-xs h-full">
                   <div className="w-full h-full flex items-center justify-center bg-white p-2">
                     {floorPlanImage ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={floorPlanImage} alt="Floor Plan" className="w-full h-full object-contain" />
+                      <img src={floorPlanImage} alt="平面図" className="w-full h-full object-contain" />
                     ) : (
-                      <span className="text-xs text-slate-400 font-bold">図面未設定</span>
+                      <span className="text-xs text-slate-400 font-bold">平面図</span>
                     )}
                   </div>
                 </div>
 
-                {/* Right Column: Conditions & Table (3 cols) */}
-                <div className="col-span-3 flex flex-col justify-between gap-2 text-[10.5px]">
+                {/* Right Column: Conditions & Major Info (3 cols) */}
+                <div className="col-span-3 flex flex-col justify-between gap-2 text-[10.5px] h-full overflow-hidden">
                   
-                  {/* Rent Box */}
-                  <div className="bg-blue-900 text-white p-2.5 rounded-lg text-center shadow-xs border-b-2 border-blue-600">
-                    <span className="text-[10px] text-blue-200 font-bold block">賃料 (月額)</span>
-                    <div className="text-xl font-black tracking-tight text-white">
-                      {data.rent.amount ? data.rent.amount.toLocaleString() : '---'}
-                      <span className="text-xs font-normal ml-1">円</span>
+                  {/* Rent Card (Only rendered if valid rent exists - NO dummy/guess box) */}
+                  {hasValidRent && (
+                    <div className="bg-[#0F172A] text-white p-2.5 rounded-lg text-center shadow-xs border-b-2 border-[#20B26C] shrink-0">
+                      <span className="text-[10px] text-emerald-300 font-bold block">賃料 (月額)</span>
+                      <div className="text-xl font-black tracking-tight text-white">
+                        {data.rent.amount!.toLocaleString()}
+                        <span className="text-xs font-normal ml-1">円</span>
+                      </div>
+                      <div className="text-[9.5px] text-slate-300 mt-0.5">
+                        {data.rent.taxIncluded ? '(税込)' : data.rent.taxIncluded === false ? '(税別)' : ''}
+                        {data.rent.tsuboPrice ? ` 坪単価: ${data.rent.tsuboPrice.toLocaleString()}円` : ''}
+                      </div>
                     </div>
-                    <div className="text-[9.5px] text-blue-200 mt-0.5">
-                      {data.rent.taxIncluded ? '(税込)' : data.rent.taxIncluded === false ? '(税別)' : ''}
-                      {data.rent.tsuboPrice ? ` 坪単価: ${data.rent.tsuboPrice.toLocaleString()}円` : ''}
-                    </div>
-                  </div>
+                  )}
 
-                  {/* Highlights */}
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-amber-900 space-y-1">
-                    <span className="font-bold text-[10px] text-amber-800 flex items-center gap-1">
-                      <Sparkles className="w-3 h-3 text-amber-600" />
-                      物件アピールポイント
-                    </span>
-                    <div className="text-[10px] leading-tight space-y-0.5">
-                      {appState.additionalItems.length > 0 ? (
-                        appState.additionalItems.map(item => (
+                  {/* Highlights (Only rendered if user defined additional items - NO fake bullets) */}
+                  {appState.additionalItems && appState.additionalItems.length > 0 && (
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-2 text-emerald-950 space-y-1 shrink-0">
+                      <span className="font-bold text-[10px] text-emerald-800 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-emerald-600" />
+                        物件アピールポイント
+                      </span>
+                      <div className="text-[10px] leading-tight space-y-0.5">
+                        {appState.additionalItems.map(item => (
                           <div key={item.id}>• <span className="font-bold">{item.name}:</span> {item.content}</div>
-                        ))
-                      ) : (
-                        <>
-                          <div>• 駅近好立地・視認性良好</div>
-                          <div>• {data.property.usage || '店舗・オフィス'}に最適</div>
-                        </>
-                      )}
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
-                  {/* Details Table */}
-                  <div className="border border-slate-300 rounded-lg overflow-hidden bg-white">
-                    <table className="w-full text-left border-collapse text-[9.5px]">
-                      <tbody>
-                        <tr className="border-b border-slate-200">
-                          <td className="bg-slate-100 font-bold p-1 w-20 text-slate-700">契約面積</td>
-                          <td className="p-1 font-bold">{data.area.tsubo ? `${data.area.tsubo}坪` : ''} ({data.area.sqm || '-'}㎡)</td>
-                        </tr>
-                        <tr className="border-b border-slate-200">
-                          <td className="bg-slate-100 font-bold p-1 text-slate-700">共益費</td>
-                          <td className="p-1">{data.commonFee.amount ? `${data.commonFee.amount.toLocaleString()}円` : 'なし'}</td>
-                        </tr>
-                        <tr className="border-b border-slate-200">
-                          <td className="bg-slate-100 font-bold p-1 text-slate-700">敷金/保証金</td>
-                          <td className="p-1">{data.keyMoney || data.deposit || 'なし'}</td>
-                        </tr>
-                        <tr className="border-b border-slate-200">
-                          <td className="bg-slate-100 font-bold p-1 text-slate-700">礼金/償却</td>
-                          <td className="p-1">{data.depreciation || 'なし'}</td>
-                        </tr>
-                        <tr className="border-b border-slate-200">
-                          <td className="bg-slate-100 font-bold p-1 text-slate-700">引渡時期</td>
-                          <td className="p-1">{data.property.handoverTiming || '相談'}</td>
-                        </tr>
-                        <tr>
-                          <td className="bg-slate-100 font-bold p-1 text-slate-700">構造/規模</td>
-                          <td className="p-1 truncate">{data.building.structure || '-'} {data.building.scale || ''}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                  {/* Dynamic Details Table (Only fields with valid real values are shown - zero empty rows) */}
+                  {jsAConditions.length > 0 && (
+                    <div className="border border-slate-300 rounded-lg overflow-hidden bg-white shadow-2xs flex-1 flex flex-col">
+                      <table className="w-full text-left border-collapse text-[9.5px] flex-1">
+                        <tbody>
+                          {jsAConditions.map((cond, idx) => (
+                            <tr key={cond.label} className={idx < jsAConditions.length - 1 ? "border-b border-slate-200" : ""}>
+                              <td className="bg-slate-50 font-bold p-1.5 w-24 text-slate-700 whitespace-nowrap">{cond.label}</td>
+                              <td className="p-1.5 font-bold text-slate-900">{cond.value}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
 
                 </div>
 
@@ -572,11 +642,11 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
 
               {/* Bottom JS Contact Footer Band */}
               {appState.jsContact.showContact && (
-                <div className="bg-slate-100 border-t-2 border-blue-600 p-2.5 rounded-lg flex items-center justify-between text-[9.5px] text-slate-700 mt-1">
+                <div className="bg-slate-50 border-t-2 border-[#20B26C] p-2.5 rounded-lg flex items-center justify-between text-[9.5px] text-slate-700 mt-1 shadow-2xs">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-black text-xs text-slate-900">{appState.jsContact.company}</span>
-                      <span className="bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded text-[8.5px]">
+                      <span className="font-black text-xs text-[#0F172A]">{appState.jsContact.company}</span>
+                      <span className="bg-emerald-100 text-emerald-900 font-bold px-1.5 py-0.5 rounded text-[8.5px]">
                         取引態様: {appState.jsContact.transactionType || '媒介'}
                       </span>
                       <span className="text-slate-600 font-mono text-[9px]">{formattedLicense}</span>
@@ -593,10 +663,10 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
 
                   {/* Staff Box */}
                   {appState.jsContact.personName && (
-                    <div className="bg-white border border-blue-300 rounded-md p-1.5 text-right pl-3 pr-2.5 shadow-2xs">
-                      <span className="text-[8.5px] text-blue-600 font-bold block">担当者直通連絡先</span>
+                    <div className="bg-white border border-emerald-300 rounded-md p-1.5 text-right pl-3 pr-2.5 shadow-2xs">
+                      <span className="text-[8.5px] text-emerald-700 font-bold block">担当者直通連絡先</span>
                       <span className="text-xs font-black text-slate-900 block">{appState.jsContact.personName}</span>
-                      <span className="text-[10px] font-bold text-blue-700 font-mono block">{appState.jsContact.personTel}</span>
+                      <span className="text-[10px] font-bold text-emerald-800 font-mono block">{appState.jsContact.personTel}</span>
                     </div>
                   )}
                 </div>

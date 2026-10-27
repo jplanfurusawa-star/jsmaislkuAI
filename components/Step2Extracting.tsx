@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { AppState, PropertyData, ExtractedImage, ImageCategory, CoverImageSettings, FloorPlanAsset, PropertyUnit } from '@/types';
-import { extractAndClassifyImagesFromPdf, extractPdfTextAndRenderPages } from '@/utils/pdf';
+import { extractAndClassifyImagesFromPdf, extractPdfTextAndRenderPages, assignSlotByFormat } from '@/utils/pdf';
 import { generateMapImages } from '@/utils/maps';
 import { cropVisualElementsFromSource } from '@/utils/imageCropper';
 import { Loader2, CheckCircle, AlertTriangle, RefreshCw, Layers } from 'lucide-react';
@@ -506,7 +506,24 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
           }
         }
 
-        const hasPhoto = allClassifiedImages.some(img => img.category === 'PHOTO' || img.subCategory.includes('外観') || img.subCategory.includes('内観'));
+        const isUsablePhoto = (img: ExtractedImage) => {
+          const sub = String(img.subCategory || '').toLowerCase();
+          const label = String(img.label || '').toLowerCase();
+          const forbidden = /会社ロゴ|ロゴ|社章|会社情報|募集条件|文字領域|広告|バナー|使用しない/;
+          return (
+            img.category === 'PHOTO' &&
+            !img.isExcludedFromPhoto &&
+            !forbidden.test(sub) &&
+            !forbidden.test(label)
+          );
+        };
+
+        const hasAnyUsablePhoto = allClassifiedImages.some(isUsablePhoto);
+        const hasExteriorPhoto = allClassifiedImages.some(img => {
+          if (!isUsablePhoto(img)) return false;
+          const text = `${img.subCategory || ''} ${img.label || ''}`;
+          return /外観|ファサード|建物全景|店舗外観|路面/.test(text);
+        });
         const hasMap = allClassifiedImages.some(img => img.category === 'ACCESS' || img.subCategory.includes('案内') || img.subCategory.includes('地図'));
         const embeddedPlanCount = allClassifiedImages.filter(img => img.category === 'PLAN' || img.subCategory === '平面図').length;
         const expectedPlanCount = Math.max(
@@ -517,22 +534,62 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
         const needsAdditionalPlans = expectedPlanCount > 0 && embeddedPlanCount < expectedPlanCount;
 
         // 2. 不足しているカテゴリをAI領域認識（クロップ）で補完
-        if ((needsAdditionalPlans || !hasPhoto || !hasMap) && data.visualElements && Array.isArray(data.visualElements) && data.visualElements.length > 0) {
+        // 外観写真はJS-Aを含む全フォーマットで重要。
+        // 「PHOTOが1枚ある」だけでは補完を止めず、外観写真が実際に存在するかを個別判定する。
+        const needsExteriorPhoto = !hasExteriorPhoto;
+        const needsAnyPhoto = !hasAnyUsablePhoto;
+
+        if (
+          (needsAdditionalPlans || needsExteriorPhoto || needsAnyPhoto || !hasMap) &&
+          data.visualElements &&
+          Array.isArray(data.visualElements) &&
+          data.visualElements.length > 0
+        ) {
           setExtractStatus('未検出素材の補完のため、AI視覚領域切り出しを実行中...');
           try {
             const filteredDetections = data.visualElements.filter((d: any) => {
-              const cat = (d.category || '').toUpperCase();
-              const sub = (d.subCategory || '').toLowerCase();
+              const cat = String(d.category || '').toUpperCase();
+              const subRaw = String(d.subCategory || '');
+              const labelRaw = String(d.label || '');
+              const text = `${subRaw} ${labelRaw}`;
+              const sub = subRaw.toLowerCase();
+
+              const isLogoOrCompanyInfo = /会社ロゴ|ロゴ|社章|会社情報|仲介会社|広告バナー|バナー/.test(text);
+              if (isLogoOrCompanyInfo || cat.includes('OTHER')) return false;
+
               if (cat.includes('PLAN') || sub.includes('平面') || sub.includes('区画図') || sub.includes('フロア図')) {
                 return needsAdditionalPlans;
               }
-              if (cat.includes('ACCESS') || sub.includes('案内') || sub.includes('地図')) return !hasMap;
-              return !hasPhoto;
+
+              if (cat.includes('ACCESS') || sub.includes('案内') || sub.includes('地図')) {
+                return !hasMap;
+              }
+
+              if (cat.includes('PHOTO') || /外観|内観|写真|ファサード|エントランス|前面道路|周辺/.test(text)) {
+                const isExteriorDetection = /外観|ファサード|建物全景|店舗外観|路面/.test(text);
+                // 外観不足時は外観候補を必ず切り出す。
+                // PHOTO自体が1枚も無い場合はPHOTO候補をすべて補完する。
+                return needsAnyPhoto || (needsExteriorPhoto && isExteriorDetection);
+              }
+
+              return false;
             });
 
             if (filteredDetections.length > 0) {
               const croppedElements = await cropVisualElementsFromSource(files, filteredDetections);
-              allClassifiedImages.push(...croppedElements);
+
+              // 同じAI切り出しを二重追加しない。埋め込み画像とAIクロップの両方がある場合は
+              // どちらも素材として残すが、完全に同一URL/同一IDは除外する。
+              const existingKeys = new Set(
+                allClassifiedImages.map(img => `${img.id}|${img.dataUrl}`)
+              );
+              for (const cropped of croppedElements) {
+                const key = `${cropped.id}|${cropped.dataUrl}`;
+                if (!existingKeys.has(key)) {
+                  allClassifiedImages.push(cropped);
+                  existingKeys.add(key);
+                }
+              }
             }
           } catch (cropErr) {
             console.warn('Visual elements crop fallback warning', cropErr);
@@ -961,19 +1018,19 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
             method: mapRes.method,
           },
           images: {
-            main: assignedSlots.main?.dataUrl || (data.images?.main || ''),
-            floorPlan: assignedSlots.floorPlan?.dataUrl || (mergedPlans.find(p => !!p.imagePath)?.imagePath || data.images?.floorPlan || ''),
-            map: mapRes.detailMapUrl || assignedSlots.map?.dataUrl || (data.images?.map || ''),
+            main: assignedSlots.main || (data.images?.main || ''),
+            floorPlan: assignedSlots.floorPlan || (mergedPlans.find(p => !!p.imagePath)?.imagePath || data.images?.floorPlan || ''),
+            map: mapRes.detailMapUrl || assignedSlots.map || (data.images?.map || ''),
             detailMap: mapRes.detailMapUrl || '',
-            subPhotos: assignedSlots.subPhotos.map(img => img.dataUrl),
+            subPhotos: assignedSlots.subPhotos,
             allExtracted: finalizedClassifiedImages.map(img => img.dataUrl),
             classifiedList: finalizedClassifiedImages,
           }
         };
 
         const initialCoverSettings: CoverImageSettings = {
-          imageId: assignedSlots.main?.id,
-          imageUrl: assignedSlots.main?.dataUrl,
+          imageId: assignedSlots.mainImage?.id,
+          imageUrl: assignedSlots.main || assignedSlots.mainImage?.dataUrl,
           objectPositionX: 50,
           objectPositionY: 50,
           scale: 1.0,
@@ -1076,33 +1133,4 @@ export default function Step2Extracting({ files, appState, setAppState, onNext }
       </div>
     </div>
   );
-}
-
-function assignSlotByFormat(images: ExtractedImage[], format: string) {
-  const photoImages = images.filter(img => img.category === 'PHOTO' && !img.isExcludedFromPhoto);
-  const planImages = images.filter(img => img.category === 'PLAN' || img.subCategory === '平面図');
-  const mapImages = images.filter(img => img.category === 'ACCESS' || img.subCategory === '現地案内図' || img.subCategory === '周辺地図');
-
-  let main = photoImages.find(img => img.subCategory.includes('外観')) || photoImages[0];
-  let floorPlan = planImages[0];
-  let map = mapImages[0];
-
-  const subPhotos = photoImages.filter(img => img.id !== main?.id).slice(0, 4);
-
-  const classifiedList = images.map(img => {
-    let assignedSlot: ExtractedImage['assignedSlot'] = 'none';
-    if (img.id === main?.id) assignedSlot = 'main';
-    else if (img.id === floorPlan?.id) assignedSlot = 'floorPlan';
-    else if (img.id === map?.id) assignedSlot = 'map';
-    else if (subPhotos.some(sp => sp.id === img.id)) assignedSlot = 'photo';
-    return { ...img, assignedSlot };
-  });
-
-  return {
-    main,
-    floorPlan,
-    map,
-    subPhotos,
-    classifiedList,
-  };
 }
