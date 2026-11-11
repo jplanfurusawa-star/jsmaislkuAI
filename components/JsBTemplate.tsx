@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppState, PropertyData, CoverImageSettings, ExtractedImage, PropertyDetailItem } from '@/types';
-import { AlertCircle, MapPin } from 'lucide-react';
+import { AlertCircle, MapPin, Image as ImageIcon } from 'lucide-react';
 
 // ==========================================
 // J.square 公式ロゴコンポーネント

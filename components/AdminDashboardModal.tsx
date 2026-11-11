@@ -298,10 +298,10 @@ export default function AdminDashboardModal({ isOpen, onClose, onSettingsUpdated
   const handleLinkCurrentGoogle = async (presetId: string) => {
     if (!currentUser) return;
     const updated = await linkStaffPresetWithGoogle(String(presetId), {
-      email: currentUser.email || '',
-      uid: currentUser.uid,
-      displayName: currentUser.displayName || undefined,
-      photoUrl: currentUser.photoURL || undefined,
+      googleEmail: currentUser.email || '',
+      googleUid: currentUser.uid,
+      googleDisplayName: currentUser.displayName || undefined,
+      googlePhotoUrl: currentUser.photoURL || undefined,
     });
     setPresets(updated);
     onSettingsUpdated?.(adminSettings, updated);
@@ -1794,7 +1794,7 @@ export default function AdminDashboardModal({ isOpen, onClose, onSettingsUpdated
                                       <div className="flex items-center justify-between text-[8px] text-slate-300">
                                         <span className="font-bold">図面区画（{analysisResult.layoutStructure?.floorPlanPosition || '左側'}）</span>
                                         <span className="text-[7px] text-purple-400 font-mono">
-                                          {analysisResult.layoutStructure?.floorPlanWidthRatio || 50}%
+                                          {analysisResult.layoutStructure?.floorPlanSize === 'large' ? '大' : analysisResult.layoutStructure?.floorPlanSize === 'medium' ? '中' : '標準'}
                                         </span>
                                       </div>
                                       <div className="w-full flex-1 bg-slate-900/90 rounded border border-dashed border-slate-700 flex items-center justify-center my-1">
@@ -1820,7 +1820,7 @@ export default function AdminDashboardModal({ isOpen, onClose, onSettingsUpdated
                                           ))}
                                         </div>
                                         <span className="text-[7px] text-purple-300 text-right">
-                                          最大{analysisResult.layoutStructure?.photoSlotCount || 4}枚枠
+                                          最大{analysisResult.layoutStructure?.photoCount || 4}枚枠
                                         </span>
                                       </div>
 

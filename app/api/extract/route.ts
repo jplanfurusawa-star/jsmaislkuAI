@@ -16,12 +16,12 @@ const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes cache
 // Candidate models in priority order:
 // 1. PRIMARY_MODEL (gemini-2.5-flash): high speed, multimodal extraction
 // 2. FALLBACK_MODELS (gemini-flash-latest, gemini-3.1-flash-lite): resilient fallback
-export const PRIMARY_MODEL = "gemini-2.5-flash";
-export const FALLBACK_MODELS: readonly string[] = [
+const PRIMARY_MODEL = "gemini-2.5-flash";
+const FALLBACK_MODELS: readonly string[] = [
   "gemini-flash-latest",
   "gemini-3.1-flash-lite",
 ];
-export const CANDIDATE_MODELS: readonly string[] = [
+const CANDIDATE_MODELS: readonly string[] = [
   PRIMARY_MODEL,
   ...FALLBACK_MODELS,
 ];

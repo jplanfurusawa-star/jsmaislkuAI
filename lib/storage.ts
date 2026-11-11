@@ -861,13 +861,18 @@ export async function persistMySoku(appState: AppState, thumbnail?: string): Pro
   }
 
   // Step 2: Save sanitized document to Cloud Firestore
+  const validFormats = ['JS-A', 'JS-B', 'JS-C', 'JS-D'] as const;
+  const safeFormat = validFormats.includes(appState.format as (typeof validFormats)[number])
+    ? (appState.format as (typeof validFormats)[number])
+    : 'JS-A';
+
   const savedItem: SavedMySoku = {
     id: mysokuId,
     userId,
     title: `${sanitizedData.property.name || '物件'} ${sanitizedData.property.room || ''}`.trim(),
     createdAt: now,
     updatedAt: now,
-    format: appState.format,
+    format: safeFormat,
     propertyName: sanitizedData.property.name || '物件名未定',
     room: sanitizedData.property.room || '',
     address: sanitizedData.property.address || '',

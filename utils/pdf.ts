@@ -1,4 +1,5 @@
 import type { ExtractedImage, ImageCategory } from '@/types';
+import JSZip from 'jszip';
 
 type Confidence = 'high' | 'medium' | 'low';
 
@@ -865,9 +866,12 @@ function pdfImageToCanvas(
         return null;
       }
 
+      const imageDataArray = new Uint8ClampedArray(rgba.length);
+      imageDataArray.set(rgba);
+
       ctx.putImageData(
         new ImageData(
-          rgba,
+          imageDataArray,
           width,
           height
         ),

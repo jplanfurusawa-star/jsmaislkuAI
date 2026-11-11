@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-export const PRIMARY_MODEL = "gemini-2.5-flash";
+const PRIMARY_MODEL = "gemini-2.5-flash";
 export const FALLBACK_MODELS: readonly string[] = [
   "gemini-flash-latest",
   "gemini-3.1-flash-lite",

@@ -319,7 +319,6 @@ export default function Step7Preview({ appState, setAppState, uploadedFiles, onN
         floorPlan: floorPlanImage,
         map: jsbMedia.mapImage || effectiveWideMap,
         detailMap: effectiveDetailMap,
-        subPhotos: jsbMedia.photos,
       });
     } catch (err) {
       console.error("PowerPoint generation failed", err);

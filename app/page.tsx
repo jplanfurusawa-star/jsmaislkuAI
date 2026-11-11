@@ -39,6 +39,8 @@ import Step8Output from "@/components/Step8Output";
 import HistoryModal from "@/components/HistoryModal";
 import StaffPresetModal from "@/components/StaffPresetModal";
 import AdminDashboardModal from "@/components/AdminDashboardModal";
+import IssuesModal from "@/components/IssuesModal";
+import { AlertTriangle } from "lucide-react";
 
 import {
   auth,
@@ -278,6 +280,14 @@ export default function Home() {
   const [
     isAdminModalOpen,
     setIsAdminModalOpen,
+  ] =
+    useState(
+      false
+    );
+
+  const [
+    isIssuesModalOpen,
+    setIsIssuesModalOpen,
   ] =
     useState(
       false
@@ -1029,6 +1039,22 @@ export default function Home() {
                       保存履歴 (HSTRAGE)
                     </span>
                   </button>
+
+                  <button
+                    onClick={() =>
+                      setIsIssuesModalOpen(
+                        true
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/50 text-red-300 flex items-center gap-1.5 transition-colors border border-red-500/40 shadow-xs"
+                    title="静的解析・型エラー一覧レポートを開く"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-red-400 animate-pulse" />
+
+                    <span className="font-bold">
+                      エラー一覧 (Issuesまとめ)
+                    </span>
+                  </button>
                 </nav>
 
                 <div className="flex items-center space-x-3 border-l border-slate-700 pl-4">
@@ -1367,6 +1393,17 @@ export default function Home() {
         }
         onSettingsUpdated={
           handleSettingsUpdated
+        }
+      />
+
+      <IssuesModal
+        isOpen={
+          isIssuesModalOpen
+        }
+        onClose={() =>
+          setIsIssuesModalOpen(
+            false
+          )
         }
       />
     </div>

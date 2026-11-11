@@ -1390,7 +1390,6 @@ export async function downloadPdfPresentation(
           allowTaint: true,
           logging: false,
           backgroundColor: '#ffffff',
-          letterRendering: false,
           ignoreElements: (element) => {
             return element.hasAttribute('data-pdf-ignore') || element.hasAttribute('data-export-hidden');
           },
